@@ -32,21 +32,21 @@ jobs:
       # Checkout Repository
       # ─────────────────────────────
       - name: Checkout repository
-        uses: actions/checkout@v4
+        penggunaan : actions/checkout@v4
 
       # ─────────────────────────────
-      # Setup Python
+      # Pengaturan Python
       # ─────────────────────────────
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      - nama : Pengaturan Python
+        menggunakan : actions/setup-python@v5
+        dengan :
+          versi python : '3.11'
 
       # ─────────────────────────────
-      # Install Dependencies
+      # Instal Dependensi
       # ─────────────────────────────
-      - name: Install dependencies
-        run: |
+      - nama : Instal dependensi
+        jalankan : |
           set -e
 
           sudo apt-get update -y
@@ -54,64 +54,62 @@ jobs:
 
           pip install requests playwright
 
-          playwright install chromium
-          playwright install-deps chromium
+          penulis drama memasang kromium
+          penulis drama instalasi dependensi kromium
 
-          ffmpeg -version | head -1
+          ffmpeg -versi | head -1
 
       # ─────────────────────────────
-      # Prepare Folder
+      # Siapkan Folder
       # ─────────────────────────────
-      - name: Prepare folders
-        run: |
+      - nama : Siapkan folder
+        jalankan : |
           mkdir -p media
 
       # ─────────────────────────────
-      # Create urls.txt
+      # Buat urls.txt
       # ─────────────────────────────
-      - name: Create URL list
-        run: |
+      - nama : Buat daftar URL
+        jalankan : |
           echo "${{ github.event.inputs.video_url }}" > urls.txt
-          echo "Generated urls.txt:"
-          cat urls.txt
+          echo "URL yang dihasilkan.txt:"
+          kucing urls.txt
 
       # ─────────────────────────────
-      # Download TikTok Video
+      # Unduh Video TikTok
       # ─────────────────────────────
-      - name: Run downloader.py
-        run: |
+      - nama : Jalankan downloader.py
+        jalankan : |
           set -e
 
           python3 download.py
 
           ffprobe input_video.mp4 > /dev/null 2>&1 || {
-            echo "❌ Invalid downloaded video"
-            exit 1
+            echo "❌ Video yang diunduh tidak valid"
+            keluar 1
           }
 
-          echo "✅ Video downloaded"
+          echo "✅ Video berhasil diunduh"
 
       # ─────────────────────────────
-      # FFmpeg Edit
+      # Edit FFmpeg
       # ─────────────────────────────
-      - name: Edit Video
-        run: |
+      - nama : Edit Video
+        jalankan : |
           set -e
 
           SAFE_NAME=$(echo "${{ github.event.inputs.output_filename }}" | tr -cd '[:alnum:]_-')
-          OUTPUT_FILE="media/${SAFE_NAME}.mp4"
+          FILE_OUTPUT="media/${NAMA_AMAN}.mp4"
 
-          echo "🎬 Processing video..."
+          echo "🎬 Memproses video..."
 
           ffmpeg -y \
             -i input_video.mp4 \
             -vf "scale=1080:1920" \
             -c:v libx264 \
-            -preset ultrafast \
+            -preset fast \
             -crf 23 \
             -c:a aac \
-
-          
             "$OUTPUT_FILE"
 
           echo "✅ Video edited"
