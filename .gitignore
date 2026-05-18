@@ -1,0 +1,15 @@
+# Token & credentials - JANGAN PERNAH di-commit
+token_backup.json
+client_secret*.json
+*.credentials.json
+credentials.json
+
+# Video input sementara
+input_video.mp4
+youtube_result.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
