@@ -1,0 +1,144 @@
+name: FFmpeg Edit + TikTok Draft Upload
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  workflow_dispatch:
+    inputs:
+
+      video_url:
+        description: 'URL video sumber'
+        required: true
+
+      output_filename:
+        description: 'Nama output tanpa .mp4'
+        required: true
+        default: 'video-001'
+
+      tiktok_description:
+        description: 'Caption TikTok'
+        required: false
+        default: 'Video keren! #fyp #viral'
+
+jobs:
+  edit-and-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+
+      # ─────────────────────────────
+      # Checkout
+      # ─────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      # ─────────────────────────────
+      # Setup Python
+      # ─────────────────────────────
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      # ─────────────────────────────
+      # Install Dependencies
+      # ─────────────────────────────
+      - name: Install dependencies
+        run: |
+          set -e
+
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg
+
+          pip install \
+            requests \
+            playwright
+
+          playwright install chromium
+          playwright install-deps chromium
+
+          ffmpeg -version | head -1
+
+      # ─────────────────────────────
+      # Prepare Folder
+      # ─────────────────────────────
+      - name: Prepare media folder
+        run: |
+          mkdir -p media
+
+      # ─────────────────────────────
+      # Download Video
+      # ─────────────────────────────
+      - name: Download Video
+        run: |
+          set -e
+
+          echo "📥 Downloading source video..."
+
+          curl -L \
+            --max-time 120 \
+            --retry 3 \
+            --retry-delay 5 \
+            -H "User-Agent: Mozilla/5.0" \
+            -o input_video.mp4 \
+            "${{ github.event.inputs.video_url }}"
+
+          ffprobe input_video.mp4 > /dev/null 2>&1 || {
+            echo "❌ Invalid video"
+            exit 1
+          }
+
+          echo "✅ Video downloaded"
+
+      # ─────────────────────────────
+      # FFmpeg Edit
+      # ─────────────────────────────
+      - name: Edit Video
+        run: |
+          set -e
+
+          SAFE_NAME=$(echo "${{ github.event.inputs.output_filename }}" | tr -cd '[:alnum:]_-')
+
+          OUTPUT_FILE="media/${SAFE_NAME}.mp4"
+
+          echo "🎬 Processing video..."
+
+          ffmpeg -y \
+            -i input_video.mp4 \
+            -vf "scale=2160:3840:flags=lanczos,unsharp=7:7:3.0:7:7:1.2,eq=contrast=1.45:brightness=0.05:saturation=1.05:gamma=1.02,format=yuv420p" \
+            -c:v libx264 \
+            -preset veryslow \
+            -crf 18 \
+            -profile:v high \
+            -level 5.1 \
+            -pix_fmt yuv420p \
+            -movflags +faststart \
+            -c:a aac \
+            -b:a 192k \
+            -ar 48000 \
+            "$OUTPUT_FILE"
+
+          echo "✅ Video edited"
+
+      # ─────────────────────────────
+      # Upload TikTok Draft
+      # ─────────────────────────────
+      - name: Upload TikTok Draft
+        run: |
+          set -e
+
+          echo '${{ secrets.TIKTOK_COOKIES_JSON }}' > cookies.json
+
+          python3 scripts/upload_tiktok.py \
+            --url "file://$(pwd)/media/${{ github.event.inputs.output_filename }}.mp4" \
+            --description "${{ github.event.inputs.tiktok_description }}" \
+            --cookies cookies.json
+
+      # ─────────────────────────────
+      # Finished
+      # ─────────────────────────────
+      - name: Finished
+        run: |
+          echo "🎉 Workflow completed"
