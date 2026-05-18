@@ -111,20 +111,8 @@ jobs:
             -crf 23 \
             -c:a aac \
 
-          # ffmpeg -y \
-          #   -i input_video.mp4 \
-          #   -vf "scale=2160:3840:flags=lanczos,unsharp=7:7:3.0:7:7:1.2,eq=contrast=1.45:brightness=0.02:saturation=1.05:gamma=1.04,format=yuv420p" \
-          #   -c:v libx264 \
-          #   -preset veryslow \
-          #   -crf 18 \
-          #   -profile:v high \
-          #   -level 5.1 \
-          #   -pix_fmt yuv420p \
-          #   -movflags +faststart \
-          #   -c:a aac \
-          #   -b:a 192k \
-          #   -ar 48000 \
-          #   "$OUTPUT_FILE"
+          
+            "$OUTPUT_FILE"
 
           echo "✅ Video edited"
 
