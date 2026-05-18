@@ -32,13 +32,13 @@ jobs:
       # Checkout Repository
       # ─────────────────────────────
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       # ─────────────────────────────
       # Setup Python
       # ─────────────────────────────
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -72,7 +72,6 @@ jobs:
       - name: Create URL list
         run: |
           echo "${{ github.event.inputs.video_url }}" > urls.txt
-
           echo "Generated urls.txt:"
           cat urls.txt
 
@@ -100,7 +99,6 @@ jobs:
           set -e
 
           SAFE_NAME=$(echo "${{ github.event.inputs.output_filename }}" | tr -cd '[:alnum:]_-')
-
           OUTPUT_FILE="media/${SAFE_NAME}.mp4"
 
           echo "🎬 Processing video..."
@@ -123,16 +121,57 @@ jobs:
           echo "✅ Video edited"
 
       # ─────────────────────────────
+      # Validate cookies secret
+      # ─────────────────────────────
+      - name: Validate cookies secret
+        run: |
+          set -e
+
+          # Pastikan secret tidak kosong
+          if [ -z '${{ secrets.TIKTOK_COOKIES_JSON }}' ]; then
+            echo "❌ Secret TIKTOK_COOKIES_JSON kosong atau belum di-set!"
+            echo "   Buka Settings > Secrets and variables > Actions > New repository secret"
+            echo "   Nama: TIKTOK_COOKIES_JSON"
+            echo "   Value: isi dengan JSON array cookies dari browser"
+            exit 1
+          fi
+
+          # Tulis cookies ke file
+          printf '%s' '${{ secrets.TIKTOK_COOKIES_JSON }}' > cookies.json
+
+          # Validasi format JSON
+          python3 -c "
+          import json, sys
+          try:
+              data = json.load(open('cookies.json'))
+              if isinstance(data, dict) and 'cookies' in data:
+                  data = data['cookies']
+              assert isinstance(data, list), 'Harus berupa list'
+              names = [c.get('name','') for c in data]
+              print(f'✅ cookies.json valid: {len(data)} cookies')
+              # Cek ada sessionid / sid_tt (wajib untuk login TikTok)
+              login_cookies = [n for n in names if n in ('sessionid', 'sid_tt', 'sid_guard')]
+              if not login_cookies:
+                  print('⚠️  PERINGATAN: Tidak ada cookie sessionid/sid_tt/sid_guard.')
+                  print('   Pastikan Anda mengekspor cookies saat sudah login di TikTok.')
+              else:
+                  print(f'✅ Login cookies ditemukan: {login_cookies}')
+          except Exception as e:
+              print(f'❌ cookies.json tidak valid: {e}')
+              sys.exit(1)
+          "
+
+      # ─────────────────────────────
       # Upload TikTok Draft
       # ─────────────────────────────
       - name: Upload TikTok Draft
         run: |
           set -e
 
-          echo '${{ secrets.TIKTOK_COOKIES_JSON }}' > cookies.json
+          SAFE_NAME=$(echo "${{ github.event.inputs.output_filename }}" | tr -cd '[:alnum:]_-')
 
           python3 uploader.py \
-            --url "file://$(pwd)/media/${{ github.event.inputs.output_filename }}.mp4" \
+            --url "file://$(pwd)/media/${SAFE_NAME}.mp4" \
             --description "${{ github.event.inputs.tiktok_description }}" \
             --cookies cookies.json
 
@@ -146,8 +185,10 @@ jobs:
           path: media/*.mp4
 
       # ─────────────────────────────
-      # Finished
+      # Cleanup sensitive files
       # ─────────────────────────────
-      - name: Finished
+      - name: Cleanup
+        if: always()
         run: |
+          rm -f cookies.json
           echo "🎉 Workflow completed"
