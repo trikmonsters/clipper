@@ -164,10 +164,12 @@ jobs:
         run: |
           set -e
 
-          SAFE_NAME=$(echo "${{ github.event.inputs.output_filename }}" | tr -cd '[:alnum:]_-')
+          OUTPUT_FILE="media/video.mp4"
+
+          echo "🎬 Processing video..."
 
           python3 uploader.py \
-            --url "file://$(pwd)/media/${SAFE_NAME}.mp4" \
+            --url "file://$(pwd)/media/video.mp4" \
             --description "${{ github.event.inputs.tiktok_description }}" \
             --cookies cookies.json
 
