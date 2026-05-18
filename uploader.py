@@ -68,10 +68,6 @@ def prepare_video(source):
 
 
 def parse_cookies(cookies_path: str) -> list:
-    """
-    Parse cookies JSON dari browser extension (misal Cookie-Editor).
-    Fix otomatis: sameSite invalid, domain titik di depan, expires negatif.
-    """
     with open(cookies_path, "r", encoding="utf-8") as f:
         content = f.read().strip()
 
@@ -85,12 +81,10 @@ def parse_cookies(cookies_path: str) -> list:
         if "name" not in c or "value" not in c:
             continue
 
-        # Domain: strip titik Netscape, fallback tiktok.com
         domain = c.get("domain", "").lstrip(".")
         if not domain:
             domain = "tiktok.com"
 
-        # expires: support expirationDate (Chrome) dan expires
         expiry = c.get("expirationDate") or c.get("expires") or -1
         try:
             expiry = int(float(expiry))
@@ -106,11 +100,9 @@ def parse_cookies(cookies_path: str) -> list:
             "httpOnly": c.get("httpOnly", False),
         }
 
-        # expires hanya jika positif
         if expiry > 0:
             cookie["expires"] = expiry
 
-        # sameSite: hanya set jika nilai valid — jangan set jika tidak dikenal
         raw_ss = str(c.get("sameSite", "")).strip()
         if raw_ss in VALID_SAME_SITE:
             cookie["sameSite"] = raw_ss
@@ -118,7 +110,6 @@ def parse_cookies(cookies_path: str) -> list:
             mapped = SAME_SITE_MAP.get(raw_ss.lower())
             if mapped:
                 cookie["sameSite"] = mapped
-        # Jika tidak ada / tidak dikenal → tidak di-set (Playwright pakai default)
 
         cookies.append(cookie)
 
@@ -200,14 +191,55 @@ def handle_content_check_popup(page):
 
 
 def find_upload_input(page):
+    """
+    Cari input[type=file] di:
+    1. Halaman utama
+    2. Semua iframe via frame_locator (cara resmi Playwright)
+    3. Semua frame object langsung
+    """
     log("🔍 Mencari input upload...")
+
+    # 1. Halaman utama
     try:
-        file_input = page.locator("input[type='file']").first
-        file_input.wait_for(state="attached", timeout=15000)
-        log("✅ File input ditemukan")
-        return file_input
-    except Exception as e:
-        raise Exception(f"❌ Input upload tidak ditemukan: {e}")
+        el = page.locator("input[type='file']").first
+        el.wait_for(state="attached", timeout=8000)
+        log("✅ File input ditemukan di halaman utama")
+        return el
+    except Exception:
+        pass
+
+    # 2. Cari via frame_locator — cara resmi Playwright untuk iframe
+    # TikTok Studio embed editor dalam iframe dengan src berisi 'tiktok'
+    iframe_selectors = [
+        "iframe",
+        "iframe[src*='tiktok']",
+        "iframe[src*='upload']",
+        "iframe[src*='studio']",
+    ]
+    for iframe_sel in iframe_selectors:
+        try:
+            fl = page.frame_locator(iframe_sel)
+            el = fl.locator("input[type='file']").first
+            el.wait_for(state="attached", timeout=5000)
+            log(f"✅ File input ditemukan via frame_locator({iframe_sel})")
+            return el
+        except Exception:
+            continue
+
+    # 3. Fallback: cari lewat semua frame object
+    log("🔍 Mencari di semua frame object...")
+    for i, frame in enumerate(page.frames):
+        try:
+            frame_url = frame.url
+            log(f"   Frame {i}: {frame_url[:80]}")
+            el = frame.locator("input[type='file']").first
+            el.wait_for(state="attached", timeout=4000)
+            log(f"✅ File input ditemukan di frame {i}: {frame_url[:60]}")
+            return el
+        except Exception:
+            continue
+
+    raise Exception("❌ Input upload tidak ditemukan di halaman maupun iframe")
 
 
 def wait_for_upload_complete(page, timeout=180):
@@ -325,7 +357,6 @@ def upload_to_tiktok(video_path, cookies_path, description="", headless=True):
         log(f"🍪 Memuat cookies: {cookies_path}")
         cookies = parse_cookies(cookies_path)
 
-        # Tambah cookies satu per satu — skip yang error, jangan gagal semua
         ok, skip = 0, 0
         for cookie in cookies:
             try:
@@ -338,14 +369,12 @@ def upload_to_tiktok(video_path, cookies_path, description="", headless=True):
         log(f"🍪 Cookies: {ok} OK, {skip} di-skip")
 
         page = context.new_page()
-
         goto_with_retry(page, TIKTOK_UPLOAD_URL)
 
         if "login" in page.url.lower():
             raise Exception("❌ Login gagal, cookies invalid")
 
         log("✅ Login berhasil")
-
         close_modal(page)
 
         file_input = find_upload_input(page)
@@ -354,7 +383,6 @@ def upload_to_tiktok(video_path, cookies_path, description="", headless=True):
         time.sleep(5)
 
         wait_for_upload_complete(page)
-
         close_modal(page)
         handle_content_check_popup(page)
 
