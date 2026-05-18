@@ -7,6 +7,19 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
+# Nilai sameSite yang valid di Playwright
+VALID_SAME_SITE = {"Strict", "Lax", "None"}
+
+# Map nilai tidak standar dari browser export ke nilai Playwright
+SAME_SITE_MAP = {
+    "unspecified": "None",
+    "no_restriction": "None",
+    "lax": "Lax",
+    "strict": "Strict",
+    "none": "None",
+    "": "None",
+}
+
 
 def load_cookies(path):
     if not Path(path).exists():
@@ -14,74 +27,177 @@ def load_cookies(path):
 
     raw = Path(path).read_text(encoding="utf-8").strip()
 
-    # If the secret was stored as a JSON string literal (e.g. '[]' or '{"k": "v"}'), json.loads will work.
-    # If it's a single-line export from a browser extension, it should also be valid JSON.
     cookies = json.loads(raw)
 
-    # Playwright expects a list of cookie dicts. If the stored value is a dict with a "cookies" key,
-    # support that format as well.
     if isinstance(cookies, dict) and "cookies" in cookies:
         cookies = cookies["cookies"]
 
     if not isinstance(cookies, list):
         raise ValueError("Cookies JSON must be a list of cookie objects")
 
-    # Ensure required fields and normalize
     normalized = []
     for c in cookies:
         nc = dict(c)
-        # Playwright requires name and value
+
         if "name" not in nc or "value" not in nc:
             continue
-        # Ensure path
+
+        # Normalisasi sameSite — ini penyebab utama error Playwright
+        raw_ss = str(nc.get("sameSite", "")).strip()
+        if raw_ss in VALID_SAME_SITE:
+            nc["sameSite"] = raw_ss
+        else:
+            nc["sameSite"] = SAME_SITE_MAP.get(raw_ss.lower(), "None")
+
+        # Strip titik di depan domain (format Netscape)
+        if "domain" in nc:
+            nc["domain"] = nc["domain"].lstrip(".")
+
+        # Tambahkan url dari domain jika belum ada
+        if "url" not in nc and "domain" in nc:
+            nc["url"] = f"https://{nc['domain']}"
+
+        # Pastikan path ada
         nc.setdefault("path", "/")
-        # Ensure expires is int if present
+
+        # Normalisasi expires ke int
         if "expires" in nc:
             try:
-                nc["expires"] = int(nc["expires"])
+                nc["expires"] = int(float(nc["expires"]))
+                if nc["expires"] < 0:
+                    nc.pop("expires", None)
             except Exception:
                 nc.pop("expires", None)
+
+        # Hapus field yang tidak dikenal Playwright
+        allowed_fields = {
+            "name", "value", "domain", "path", "expires",
+            "httpOnly", "secure", "sameSite", "url"
+        }
+        nc = {k: v for k, v in nc.items() if k in allowed_fields}
+
         normalized.append(nc)
+
     return normalized
 
 
-def set_description(page, text):
-    # Try a few known selectors for TikTok's caption input.
+def find_upload_input(page):
+    """Cari input file di halaman utama atau di dalam iframe."""
+    # Coba di halaman utama dulu
+    try:
+        el = page.query_selector('input[type="file"]')
+        if el:
+            return page, el
+    except Exception:
+        pass
+
+    # TikTok upload menggunakan iframe — cari di sana
+    try:
+        for frame in page.frames:
+            try:
+                el = frame.query_selector('input[type="file"]')
+                if el:
+                    return frame, el
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    return None, None
+
+
+def set_description(page_or_frame, text):
     candidates = [
-        'textarea[data-e2e="caption-textarea"]',
-        'textarea[placeholder] ',
-        'textarea',
-        'div[role="textbox"]',
+        'div[data-e2e="caption-content-editable"]',
+        'div[class*="caption"] div[contenteditable="true"]',
         'div[contenteditable="true"]',
+        'textarea[placeholder]',
+        'textarea',
     ]
 
     for sel in candidates:
         try:
-            el = page.query_selector(sel)
+            el = page_or_frame.query_selector(sel)
             if el:
-                # Some editors are contenteditable divs
                 tag = el.evaluate("e => e.tagName")
                 if tag and tag.lower() == "div":
-                    el.fill("")
+                    el.click()
+                    time.sleep(0.3)
+                    el.evaluate("e => { e.innerText = ''; }")
                     el.type(text)
                 else:
                     el.fill(text)
                 return True
         except Exception:
             continue
+
+    # Coba juga di setiap frame
+    try:
+        for frame in page_or_frame.frames if hasattr(page_or_frame, "frames") else []:
+            for sel in candidates:
+                try:
+                    el = frame.query_selector(sel)
+                    if el:
+                        tag = el.evaluate("e => e.tagName")
+                        if tag and tag.lower() == "div":
+                            el.click()
+                            time.sleep(0.3)
+                            el.evaluate("e => { e.innerText = ''; }")
+                            el.type(text)
+                        else:
+                            el.fill(text)
+                        return True
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    return False
+
+
+def click_post_button(page):
+    """Klik tombol Post/Publish di halaman utama atau iframe."""
+    button_texts = ["Post", "Publish", "Save as draft", "Draft"]
+
+    # Coba halaman utama
+    for text in button_texts:
+        try:
+            btn = page.query_selector(f'button:has-text("{text}")')
+            if btn:
+                btn.click()
+                print(f"✅ Clicked button '{text}'")
+                return True
+        except Exception:
+            continue
+
+    # Coba di setiap frame
+    try:
+        for frame in page.frames:
+            for text in button_texts:
+                try:
+                    btn = frame.query_selector(f'button:has-text("{text}")')
+                    if btn:
+                        btn.click()
+                        print(f"✅ Clicked button '{text}' (in frame)")
+                        return True
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
     return False
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Upload video to TikTok (best-effort) using Playwright")
-    parser.add_argument("--url", required=True, help="file:// URL to local video or absolute path")
-    parser.add_argument("--description", default="", help="Video caption/description")
-    parser.add_argument("--cookies", required=True, help="Path to cookies.json file (Playwright-style list of cookies)")
-    parser.add_argument("--headful", action="store_true", help="Run browser with UI visible (useful for debugging)")
+    parser = argparse.ArgumentParser(description="Upload video to TikTok using Playwright")
+    parser.add_argument("--url", required=True, help="file:// URL atau path absolut ke video")
+    parser.add_argument("--description", default="", help="Caption video")
+    parser.add_argument("--cookies", required=True, help="Path ke cookies.json")
+    parser.add_argument("--headful", action="store_true", help="Jalankan browser dengan UI")
 
     args = parser.parse_args()
 
-    # Normalize file path
+    # Normalisasi path file
     file_arg = args.url
     if file_arg.startswith("file://"):
         file_path = Path(file_arg[len("file://"):])
@@ -89,54 +205,59 @@ def main():
         file_path = Path(file_arg)
 
     if not file_path.exists():
-        print(f"❌ Video file not found: {file_path}")
+        print(f"❌ Video file tidak ditemukan: {file_path}")
         sys.exit(1)
 
     try:
         cookies = load_cookies(args.cookies)
+        print(f"✅ Loaded {len(cookies)} cookies dari {args.cookies}")
     except Exception as e:
-        print(f"❌ Failed to load cookies: {e}")
+        print(f"❌ Gagal load cookies: {e}")
         sys.exit(1)
 
     print("Starting Playwright browser...")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not args.headful)
-        context = browser.new_context()
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1280, "height": 800},
+        )
 
         if cookies:
             try:
-                # Try to add cookies directly. Playwright requires domain or url for each cookie.
-                # If cookie entries lack a url, try to add a url from the domain.
-                for c in cookies:
-                    if "url" not in c and "domain" in c:
-                        # build https://<domain> as url
-                        domain = c["domain"].lstrip(".")
-                        c.setdefault("url", f"https://{domain}")
                 context.add_cookies(cookies)
-                print(f"✅ Loaded {len(cookies)} cookies into browser context")
+                print(f"✅ Cookies berhasil ditambahkan ke browser context")
             except Exception as e:
-                print(f"⚠️ Could not add cookies directly: {e}")
+                print(f"❌ Gagal menambahkan cookies: {e}")
+                print("   Pastikan cookies.json valid dan berasal dari sesi login TikTok yang aktif.")
+                browser.close()
+                sys.exit(1)
 
         page = context.new_page()
 
         try:
             print("Navigating to TikTok upload page...")
             page.goto("https://www.tiktok.com/upload", wait_until="domcontentloaded", timeout=30000)
-            time.sleep(2)
 
-            # Check login state by searching for the file input
-            file_input = None
-            try:
-                file_input = page.query_selector('input[type="file"]')
-            except Exception:
-                file_input = None
+            # Tunggu halaman load penuh
+            time.sleep(4)
+
+            # Cek apakah sudah login (cari elemen yang hanya muncul saat login)
+            frame_or_page, file_input = find_upload_input(page)
 
             if not file_input:
-                print("⚠️ Could not find the upload file input. You may not be logged in. Check your cookies.")
-                # Still give a chance: pause and let user inspect if headful
+                print("❌ Tidak bisa menemukan input upload. Kemungkinan belum login.")
+                print("   Periksa:")
+                print("   1. Cookies sudah benar dan belum expired")
+                print("   2. Cookie domain adalah 'tiktok.com' (bukan '.tiktok.com')")
+                print("   3. Ada cookie 'sessionid' atau 'sid_tt' di cookies.json")
                 if args.headful:
-                    print("Running in headful mode; please login manually and press Ctrl+C to stop when done.")
+                    print("   Mode headful: login manual lalu Ctrl+C untuk stop.")
                     try:
                         while True:
                             time.sleep(1)
@@ -145,51 +266,37 @@ def main():
                 else:
                     sys.exit(1)
 
-            print(f"Uploading file: {file_path}")
-            # Set the file to the file input
+            print(f"✅ Input upload ditemukan. Mengupload: {file_path}")
+
             try:
-                page.set_input_files('input[type="file"]', str(file_path))
+                frame_or_page.set_input_files('input[type="file"]', str(file_path))
             except Exception as e:
-                print(f"❌ Failed to set input files: {e}")
+                print(f"❌ Gagal set file input: {e}")
                 sys.exit(1)
 
-            print("File selected, waiting for upload to finish (this may take some time)...")
-            # Wait some time for upload UI to appear/update
+            print("File dipilih, menunggu upload selesai...")
             try:
-                # Wait for a common progress or title element; this is best-effort
-                page.wait_for_selector('text="Upload complete"', timeout=45000)
+                page.wait_for_selector('text="Upload complete"', timeout=60000)
+                print("✅ Upload selesai!")
             except PlaywrightTimeoutError:
-                # Not fatal; continue to try to set description and post
-                pass
+                print("⚠️ Timeout menunggu 'Upload complete', melanjutkan...")
+
+            # Tunggu UI setelah upload
+            time.sleep(2)
 
             if args.description:
                 ok = set_description(page, args.description)
                 if ok:
-                    print("✅ Description set")
+                    print("✅ Description/caption berhasil di-set")
                 else:
-                    print("⚠️ Could not set description automatically. You may need to run with --headful to fill it manually.")
+                    print("⚠️ Tidak bisa set description otomatis.")
 
-            # Try to click Post/Publish button
-            clicked = False
-            try:
-                # Try common button texts
-                for text in ("Post", "Publish", "Save as draft", "Draft"):
-                    try:
-                        btn = page.query_selector(f'button:has-text("{text}")')
-                        if btn:
-                            btn.click()
-                            print(f"Clicked button '{text}'")
-                            clicked = True
-                            break
-                    except Exception:
-                        continue
-            except Exception:
-                pass
+            time.sleep(1)
 
-            if not clicked:
-                print("⚠️ Could not automatically click the publish/post button. Run with --headful to complete the upload manually.")
+            if not click_post_button(page):
+                print("⚠️ Tidak bisa klik tombol Post otomatis.")
 
-            print("Done. If no errors were shown, check TikTok to confirm the draft/post.")
+            print("✅ Done. Cek TikTok untuk konfirmasi draft/post.")
 
         finally:
             try:
