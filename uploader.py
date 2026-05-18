@@ -84,12 +84,10 @@ def parse_cookies(cookies_path: str) -> list:
         if "name" not in c or "value" not in c:
             continue
 
-        # Domain: strip titik Netscape, fallback tiktok.com
         domain = c.get("domain", "").lstrip(".")
         if not domain:
             domain = "tiktok.com"
 
-        # expires: ambil expirationDate (format Chrome extension) atau expires
         expiry = c.get("expirationDate") or c.get("expires") or -1
         try:
             expiry = int(float(expiry))
@@ -105,11 +103,9 @@ def parse_cookies(cookies_path: str) -> list:
             "httpOnly": c.get("httpOnly", False),
         }
 
-        # expires hanya jika positif
         if expiry > 0:
             cookie["expires"] = expiry
 
-        # sameSite hanya jika ada dan valid — jangan set jika tidak ada
         raw_ss = str(c.get("sameSite", "")).strip()
         if raw_ss in VALID_SAME_SITE:
             cookie["sameSite"] = raw_ss
@@ -117,7 +113,6 @@ def parse_cookies(cookies_path: str) -> list:
             mapped = SAME_SITE_MAP.get(raw_ss.lower())
             if mapped:
                 cookie["sameSite"] = mapped
-        # Jika tidak ada / tidak dikenali → tidak di-set (Playwright pakai default)
 
         cookies.append(cookie)
 
@@ -182,17 +177,12 @@ def handle_content_check_popup(page):
     if not popup_found:
         return False
 
-    cancel_selectors = [
-        "button:has-text('Cancel')",
-        "button:has-text('Skip')",
-        "button:has-text('Not now')",
-    ]
-    for sel in cancel_selectors:
+    for sel in ["button:has-text('Cancel')", "button:has-text('Skip')", "button:has-text('Not now')"]:
         try:
             btn = page.locator(sel).first
             if btn.is_visible(timeout=3000):
                 btn.click(force=True)
-                log(f"✅ Popup content check ditutup: {sel}")
+                log(f"✅ Popup ditutup: {sel}")
                 time.sleep(2)
                 return True
         except Exception:
@@ -204,14 +194,78 @@ def handle_content_check_popup(page):
 
 
 def find_upload_input(page):
-    log("🔍 Mencari input upload...")
+    """
+    Cari input[type=file] di halaman utama dulu,
+    lalu cari di setiap iframe jika tidak ketemu.
+    TikTok Studio meletakkan upload area di dalam iframe.
+    """
+    log("🔍 Mencari input upload di halaman utama...")
+
+    # 1. Coba halaman utama
     try:
-        file_input = page.locator("input[type='file']").first
-        file_input.wait_for(state="attached", timeout=15000)
-        log("✅ File input ditemukan")
-        return file_input
+        el = page.locator("input[type='file']").first
+        el.wait_for(state="attached", timeout=8000)
+        log("✅ File input ditemukan di halaman utama")
+        return el
+    except Exception:
+        pass
+
+    # 2. Coba semua iframe
+    log("🔍 Mencari input upload di iframe...")
+    for i, frame in enumerate(page.frames):
+        try:
+            if frame == page.main_frame:
+                continue
+            frame_url = frame.url
+            log(f"   Mengecek frame {i}: {frame_url[:80]}")
+            el = frame.locator("input[type='file']").first
+            el.wait_for(state="attached", timeout=5000)
+            log(f"✅ File input ditemukan di frame {i}: {frame_url[:60]}")
+            return el
+        except Exception:
+            continue
+
+    # 3. Tunggu lebih lama lalu coba lagi (halaman mungkin belum fully loaded)
+    log("⏳ Halaman belum siap, tunggu 8 detik lagi...")
+    time.sleep(8)
+
+    for i, frame in enumerate(page.frames):
+        try:
+            el = frame.locator("input[type='file']").first
+            el.wait_for(state="attached", timeout=5000)
+            log(f"✅ File input ditemukan setelah retry (frame {i})")
+            return el
+        except Exception:
+            continue
+
+    # 4. Debug: print semua frame yang ada
+    log("⚠️  Semua frame yang ada:")
+    for i, frame in enumerate(page.frames):
+        log(f"   Frame {i}: {frame.url[:100]}")
+
+    raise RuntimeError("❌ Input upload tidak ditemukan di halaman maupun iframe mana pun")
+
+
+def set_input_files_any_frame(page, file_path: str):
+    """Set file ke input[type=file] — coba halaman utama dan semua frame."""
+    # Coba selector langsung di page (berlaku lintas frame untuk set_input_files)
+    try:
+        page.set_input_files("input[type='file']", file_path)
+        log("✅ File di-set via page.set_input_files")
+        return
     except Exception as e:
-        raise RuntimeError(f"❌ Input upload tidak ditemukan: {e}")
+        log(f"⚠️  page.set_input_files gagal: {e}")
+
+    # Coba per frame
+    for i, frame in enumerate(page.frames):
+        try:
+            frame.set_input_files("input[type='file']", file_path)
+            log(f"✅ File di-set via frame {i}")
+            return
+        except Exception:
+            continue
+
+    raise RuntimeError("❌ Tidak bisa set file ke input upload")
 
 
 def wait_for_upload_complete(page, timeout=180):
@@ -240,33 +294,37 @@ def fill_caption(page, text: str):
         "[data-e2e='caption-input']",
         "div[contenteditable='true']",
     ]
-    for selector in selectors:
-        try:
-            box = page.locator(selector).first
-            if not box.is_visible(timeout=5000):
+    # Coba halaman utama dan setiap frame
+    targets = [page] + [f for f in page.frames if f != page.main_frame]
+
+    for target in targets:
+        for selector in selectors:
+            try:
+                box = target.locator(selector).first
+                if not box.is_visible(timeout=3000):
+                    continue
+                box.click(force=True)
+                time.sleep(1)
+                page.keyboard.press("Control+a")
+                time.sleep(0.5)
+                page.keyboard.press("Backspace")
+                time.sleep(1)
+                for word in text.split():
+                    if word.startswith("#"):
+                        page.keyboard.press("Space")
+                        box.press_sequentially(word, delay=120)
+                        time.sleep(2)
+                        page.keyboard.press("Enter")
+                        time.sleep(0.5)
+                    else:
+                        box.press_sequentially(word + " ", delay=80)
+                        time.sleep(0.2)
+                time.sleep(2)
+                log(f"✅ Caption diisi")
+                return True
+            except Exception as e:
                 continue
-            box.click(force=True)
-            time.sleep(1)
-            page.keyboard.press("Control+a")
-            time.sleep(0.5)
-            page.keyboard.press("Backspace")
-            time.sleep(1)
-            for word in text.split():
-                if word.startswith("#"):
-                    page.keyboard.press("Space")
-                    box.press_sequentially(word, delay=120)
-                    time.sleep(2)
-                    page.keyboard.press("Enter")
-                    time.sleep(0.5)
-                else:
-                    box.press_sequentially(word + " ", delay=80)
-                    time.sleep(0.2)
-            time.sleep(2)
-            log(f"✅ Caption diisi: {box.inner_text()[:60]}...")
-            return True
-        except Exception as e:
-            log(f"⚠️  Caption selector gagal ({selector}): {e}")
-            continue
+
     log("⚠️  Tidak bisa mengisi caption otomatis")
     return False
 
@@ -278,24 +336,27 @@ def click_draft_button(page):
         "button:has-text('Draft')",
         "button:has-text('Save draft')",
     ]
-    for sel in selectors:
-        try:
-            btn = page.locator(sel).first
-            if not btn.is_visible(timeout=3000):
-                continue
-            if btn.get_attribute("disabled") is not None:
-                log("⏳ Tombol Draft masih disabled, tunggu sebentar...")
-                time.sleep(5)
-            btn.scroll_into_view_if_needed()
-            time.sleep(1)
+    targets = [page] + [f for f in page.frames if f != page.main_frame]
+
+    for target in targets:
+        for sel in selectors:
             try:
-                btn.click(timeout=5000)
+                btn = target.locator(sel).first
+                if not btn.is_visible(timeout=3000):
+                    continue
+                if btn.get_attribute("disabled") is not None:
+                    log("⏳ Tombol Draft masih disabled, tunggu...")
+                    time.sleep(5)
+                btn.scroll_into_view_if_needed()
+                time.sleep(1)
+                try:
+                    btn.click(timeout=5000)
+                except Exception:
+                    btn.click(force=True)
+                log(f"✅ Draft diklik: {sel}")
+                return True
             except Exception:
-                btn.click(force=True)
-            log(f"✅ Draft diklik via: {sel}")
-            return True
-        except Exception:
-            continue
+                continue
     return False
 
 
@@ -325,7 +386,6 @@ def upload_to_tiktok(video_path: Path, cookies_path: str, description: str = "",
             ),
         )
 
-        # Load cookies satu per satu — skip yang error
         cookies = parse_cookies(cookies_path)
         ok, skip = 0, 0
         for cookie in cookies:
@@ -340,41 +400,35 @@ def upload_to_tiktok(video_path: Path, cookies_path: str, description: str = "",
 
         page = context.new_page()
 
-        # Buka halaman upload
         goto_with_retry(page, TIKTOK_UPLOAD_URL)
 
-        # Cek login via URL — jika redirect ke /login berarti cookies invalid
         current_url = page.url.lower()
         if "login" in current_url:
-            log("❌ Redirect ke halaman login — cookies tidak valid atau sudah expired!")
-            log("   Ekspor ulang cookies dari browser saat sudah login di TikTok.")
+            log("❌ Redirect ke halaman login — cookies tidak valid atau expired!")
             browser.close()
             sys.exit(1)
 
         log("✅ Login berhasil, halaman upload terbuka")
-
-        # Tutup modal awal jika ada
         close_modal(page)
 
-        # Upload file
-        file_input = find_upload_input(page)
+        # Upload file — gunakan set_input_files langsung (lebih reliable lintas frame)
         log(f"📤 Mengupload: {video_path.resolve()}")
-        file_input.set_input_files(str(video_path.resolve()))
+        try:
+            set_input_files_any_frame(page, str(video_path.resolve()))
+        except Exception as e:
+            log(str(e))
+            browser.close()
+            sys.exit(1)
+
         time.sleep(5)
-
-        # Tunggu proses upload
         wait_for_upload_complete(page)
-
-        # Tutup popup setelah upload
         close_modal(page)
         handle_content_check_popup(page)
 
-        # Isi caption
         if description:
             fill_caption(page, description)
             time.sleep(2)
 
-        # Klik Draft
         time.sleep(3)
         drafted = click_draft_button(page)
 
@@ -383,7 +437,7 @@ def upload_to_tiktok(video_path: Path, cookies_path: str, description: str = "",
             time.sleep(10)
             log("✅ VIDEO BERHASIL DISIMPAN KE DRAFT TIKTOK!")
         else:
-            log("❌ Tombol Draft tidak ditemukan — cek halaman TikTok secara manual")
+            log("❌ Tombol Draft tidak ditemukan")
 
         browser.close()
 
@@ -394,14 +448,10 @@ def upload_to_tiktok(video_path: Path, cookies_path: str, description: str = "",
 
 def main():
     parser = argparse.ArgumentParser(description="Upload video ke TikTok Draft")
-    parser.add_argument("--url", required=True,
-                        help="URL video atau path file (http://, https://, file://, atau path biasa)")
-    parser.add_argument("--cookies", default="cookies.json",
-                        help="Path file cookies JSON")
-    parser.add_argument("--description", default="Video keren 🚀 #fyp #viral",
-                        help="Caption/deskripsi video")
-    parser.add_argument("--headless", action="store_true", default=True,
-                        help="Jalankan dalam mode headless (default: True)")
+    parser.add_argument("--url", required=True)
+    parser.add_argument("--cookies", default="cookies.json")
+    parser.add_argument("--description", default="Video keren 🚀 #fyp #viral")
+    parser.add_argument("--headless", action="store_true", default=True)
     args = parser.parse_args()
 
     if not Path(args.cookies).exists():
