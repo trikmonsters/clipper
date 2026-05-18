@@ -32,21 +32,21 @@ jobs:
       # Checkout Repository
       # ─────────────────────────────
       - name: Checkout repository
-        penggunaan : actions/checkout@v4
+        uses: actions/checkout@v4
 
       # ─────────────────────────────
-      # Pengaturan Python
+      # Setup Python
       # ─────────────────────────────
-      - nama : Pengaturan Python
-        menggunakan : actions/setup-python@v5
-        dengan :
-          versi python : '3.11'
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
       # ─────────────────────────────
-      # Instal Dependensi
+      # Install Dependencies
       # ─────────────────────────────
-      - nama : Instal dependensi
-        jalankan : |
+      - name: Install dependencies
+        run: |
           set -e
 
           sudo apt-get update -y
@@ -54,60 +54,60 @@ jobs:
 
           pip install requests playwright
 
-          penulis drama memasang kromium
-          penulis drama instalasi dependensi kromium
+          playwright install chromium
+          playwright install-deps chromium
 
-          ffmpeg -versi | head -1
+          ffmpeg -version | head -1
 
       # ─────────────────────────────
-      # Siapkan Folder
+      # Prepare Folder
       # ─────────────────────────────
-      - nama : Siapkan folder
-        jalankan : |
+      - name: Prepare folder
+        run: |
           mkdir -p media
 
       # ─────────────────────────────
-      # Buat urls.txt
+      # Create urls.txt
       # ─────────────────────────────
-      - nama : Buat daftar URL
-        jalankan : |
+      - name: Create URL list
+        run: |
           echo "${{ github.event.inputs.video_url }}" > urls.txt
-          echo "URL yang dihasilkan.txt:"
-          kucing urls.txt
+
+          echo "Generated urls.txt:"
+          cat urls.txt
 
       # ─────────────────────────────
-      # Unduh Video TikTok
+      # Download TikTok Video
       # ─────────────────────────────
-      - nama : Jalankan downloader.py
-        jalankan : |
+      - name: Run downloader.py
+        run: |
           set -e
 
           python3 download.py
 
           ffprobe input_video.mp4 > /dev/null 2>&1 || {
-            echo "❌ Video yang diunduh tidak valid"
-            keluar 1
+            echo "❌ Invalid downloaded video"
+            exit 1
           }
 
-          echo "✅ Video berhasil diunduh"
+          echo "✅ Video downloaded"
 
       # ─────────────────────────────
-      # Edit FFmpeg
+      # FFmpeg Edit
       # ─────────────────────────────
-      - nama : Edit Video
-        jalankan : |
+      - name: Edit Video
+        run: |
           set -e
 
-          SAFE_NAME=$(echo "${{ github.event.inputs.output_filename }}" | tr -cd '[:alnum:]_-')
-          FILE_OUTPUT="media/${NAMA_AMAN}.mp4"
+          OUTPUT_FILE="media/video.mp4"
 
-          echo "🎬 Memproses video..."
+          echo "🎬 Processing video..."
 
           ffmpeg -y \
             -i input_video.mp4 \
             -vf "scale=1080:1920" \
             -c:v libx264 \
-            -preset fast \
+            -preset ultrafast \
             -crf 23 \
             -c:a aac \
             "$OUTPUT_FILE"
@@ -121,37 +121,28 @@ jobs:
         run: |
           set -e
 
-          # Pastikan secret tidak kosong
           if [ -z '${{ secrets.TIKTOK_COOKIES_JSON }}' ]; then
-            echo "❌ Secret TIKTOK_COOKIES_JSON kosong atau belum di-set!"
-            echo "   Buka Settings > Secrets and variables > Actions > New repository secret"
-            echo "   Nama: TIKTOK_COOKIES_JSON"
-            echo "   Value: isi dengan JSON array cookies dari browser"
+            echo "❌ Secret TIKTOK_COOKIES_JSON kosong!"
             exit 1
           fi
 
-          # Tulis cookies ke file
           printf '%s' '${{ secrets.TIKTOK_COOKIES_JSON }}' > cookies.json
 
-          # Validasi format JSON
           python3 -c "
           import json, sys
+
           try:
               data = json.load(open('cookies.json'))
+
               if isinstance(data, dict) and 'cookies' in data:
                   data = data['cookies']
-              assert isinstance(data, list), 'Harus berupa list'
-              names = [c.get('name','') for c in data]
+
+              assert isinstance(data, list)
+
               print(f'✅ cookies.json valid: {len(data)} cookies')
-              # Cek ada sessionid / sid_tt (wajib untuk login TikTok)
-              login_cookies = [n for n in names if n in ('sessionid', 'sid_tt', 'sid_guard')]
-              if not login_cookies:
-                  print('⚠️  PERINGATAN: Tidak ada cookie sessionid/sid_tt/sid_guard.')
-                  print('   Pastikan Anda mengekspor cookies saat sudah login di TikTok.')
-              else:
-                  print(f'✅ Login cookies ditemukan: {login_cookies}')
+
           except Exception as e:
-              print(f'❌ cookies.json tidak valid: {e}')
+              print(f'❌ cookies.json invalid: {e}')
               sys.exit(1)
           "
 
@@ -162,12 +153,10 @@ jobs:
         run: |
           set -e
 
-          OUTPUT_FILE="media/video.mp4"
-
-          echo "🎬 Processing video..."
+          echo "Starting uploader..."
 
           python3 uploader.py \
-            --url "file://$(pwd)/media/video.mp4" \
+            --url "$(pwd)/media/video.mp4" \
             --description "${{ github.event.inputs.tiktok_description }}" \
             --cookies cookies.json
 
@@ -181,7 +170,7 @@ jobs:
           path: media/*.mp4
 
       # ─────────────────────────────
-      # Cleanup sensitive files
+      # Cleanup
       # ─────────────────────────────
       - name: Cleanup
         if: always()
