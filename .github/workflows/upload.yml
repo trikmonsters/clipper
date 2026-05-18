@@ -8,7 +8,7 @@ on:
     inputs:
 
       video_url:
-        description: 'URL video sumber'
+        description: 'URL video TikTok'
         required: true
 
       output_filename:
@@ -29,7 +29,7 @@ jobs:
     steps:
 
       # ─────────────────────────────
-      # Checkout
+      # Checkout Repository
       # ─────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -52,9 +52,7 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y ffmpeg
 
-          pip install \
-            requests \
-            playwright
+          pip install requests playwright
 
           playwright install chromium
           playwright install-deps chromium
@@ -64,29 +62,31 @@ jobs:
       # ─────────────────────────────
       # Prepare Folder
       # ─────────────────────────────
-      - name: Prepare media folder
+      - name: Prepare folders
         run: |
           mkdir -p media
 
       # ─────────────────────────────
-      # Download Video
+      # Create urls.txt
       # ─────────────────────────────
-      - name: Download Video
+      - name: Create URL list
+        run: |
+          echo "${{ github.event.inputs.video_url }}" > urls.txt
+
+          echo "Generated urls.txt:"
+          cat urls.txt
+
+      # ─────────────────────────────
+      # Download TikTok Video
+      # ─────────────────────────────
+      - name: Run downloader.py
         run: |
           set -e
 
-          echo "📥 Downloading source video..."
-
-          curl -L \
-            --max-time 120 \
-            --retry 3 \
-            --retry-delay 5 \
-            -H "User-Agent: Mozilla/5.0" \
-            -o input_video.mp4 \
-            "${{ github.event.inputs.video_url }}"
+          python3 download.py
 
           ffprobe input_video.mp4 > /dev/null 2>&1 || {
-            echo "❌ Invalid video"
+            echo "❌ Invalid downloaded video"
             exit 1
           }
 
@@ -131,10 +131,19 @@ jobs:
 
           echo '${{ secrets.TIKTOK_COOKIES_JSON }}' > cookies.json
 
-          python3 scripts/upload_tiktok.py \
+          python3 uploader.py \
             --url "file://$(pwd)/media/${{ github.event.inputs.output_filename }}.mp4" \
             --description "${{ github.event.inputs.tiktok_description }}" \
             --cookies cookies.json
+
+      # ─────────────────────────────
+      # Upload Artifact
+      # ─────────────────────────────
+      - name: Upload Result
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-video
+          path: media/*.mp4
 
       # ─────────────────────────────
       # Finished
