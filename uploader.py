@@ -2,164 +2,129 @@ import os
 import sys
 import json
 import time
-import shutil
-import argparse
 import requests
+import argparse
+import shutil
 
 from pathlib import Path
-
 from playwright.sync_api import (
     sync_playwright,
     TimeoutError as PlaywrightTimeout
 )
 
 TIKTOK_UPLOAD_URL = "https://www.tiktok.com/tiktokstudio/upload?lang=en"
-
 VIDEO_FILE = Path("video.mp4")
 
 
-# ─────────────────────────────
-# Logger
-# ─────────────────────────────
-def log(message):
-    print(f"[TikTokUploader] {message}", flush=True)
+def log(msg: str):
+    print(f"[TikTok Uploader] {msg}", flush=True)
 
 
-# ─────────────────────────────
-# Download Video
-# ─────────────────────────────
-def download_video(url, output_path):
-
+def download_video(url: str, output: Path):
     log(f"⬇️ Downloading video: {url}")
 
     response = requests.get(
         url,
         stream=True,
-        timeout=120,
+        timeout=60,
         headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            )
+            "User-Agent": "Mozilla/5.0"
         }
     )
 
     response.raise_for_status()
 
-    with open(output_path, "wb") as file:
-        for chunk in response.iter_content(chunk_size=1024 * 1024):
+    with open(output, "wb") as f:
+        for chunk in response.iter_content(chunk_size=8192):
             if chunk:
-                file.write(chunk)
+                f.write(chunk)
 
-    size_mb = output_path.stat().st_size / (1024 * 1024)
+    size_mb = output.stat().st_size / (1024 * 1024)
 
-    log(f"✅ Downloaded ({size_mb:.2f} MB)")
+    log(f"✅ Video downloaded ({size_mb:.1f} MB)")
 
 
-# ─────────────────────────────
-# Prepare Video
-# ─────────────────────────────
 def prepare_video(source):
-
     if source.startswith("http://") or source.startswith("https://"):
 
         download_video(source, VIDEO_FILE)
 
     elif source.startswith("file://"):
 
-        local_path = Path(
-            source.replace("file://", "")
-        )
+        path = Path(source.replace("file://", ""))
 
-        if not local_path.exists():
-            raise Exception(f"❌ File not found: {local_path}")
+        if not path.exists():
+            raise Exception(f"❌ File not found: {path}")
 
-        shutil.copy2(local_path, VIDEO_FILE)
+        shutil.copy2(path, VIDEO_FILE)
 
     else:
 
-        local_path = Path(source)
+        path = Path(source)
 
-        if not local_path.exists():
-            raise Exception(f"❌ File not found: {local_path}")
+        if not path.exists():
+            raise Exception(f"❌ File not found: {path}")
 
-        if local_path.resolve() != VIDEO_FILE.resolve():
-            shutil.copy2(local_path, VIDEO_FILE)
+        if path.resolve() != VIDEO_FILE.resolve():
+            shutil.copy2(path, VIDEO_FILE)
 
-    log(f"✅ Video ready: {VIDEO_FILE}")
+    size_mb = VIDEO_FILE.stat().st_size / (1024 * 1024)
+
+    log(f"✅ Video ready ({size_mb:.1f} MB)")
 
 
-# ─────────────────────────────
-# Parse Cookies
-# ─────────────────────────────
-def parse_cookies(cookies_path):
+def parse_cookies(cookies_path: str) -> list:
+    with open(cookies_path, "r", encoding="utf-8") as f:
+        content = f.read().strip()
 
-    with open(cookies_path, "r", encoding="utf-8") as file:
-        raw = json.load(file)
+    if not content.startswith("["):
+        raise Exception("❌ Invalid cookies format")
 
-    if isinstance(raw, dict) and "cookies" in raw:
-        raw = raw["cookies"]
+    raw = json.loads(content)
 
     cookies = []
 
-    for cookie in raw:
-
-        expires = (
-            cookie.get("expirationDate")
-            or cookie.get("expires")
-            or -1
-        )
+    for c in raw:
+        expiry = c.get("expirationDate") or c.get("expires") or -1
 
         cookies.append({
-            "name": cookie["name"],
-            "value": cookie["value"],
-            "domain": cookie["domain"],
-            "path": cookie.get("path", "/"),
-            "secure": cookie.get("secure", False),
-            "httpOnly": cookie.get("httpOnly", False),
-            "expires": int(expires),
+            "name": c["name"],
+            "value": c["value"],
+            "domain": c["domain"],
+            "path": c.get("path", "/"),
+            "secure": c.get("secure", False),
+            "expires": int(expiry),
+            "httpOnly": c.get("httpOnly", False),
         })
 
-    log(f"🍪 Loaded cookies: {len(cookies)}")
+    log(f"🍪 Cookies loaded ({len(cookies)})")
 
     return cookies
 
 
-# ─────────────────────────────
-# Open Page Retry
-# ─────────────────────────────
-def goto_with_retry(page, url, retries=3):
-
+def goto_with_retry(page, url: str, retries: int = 3):
     for attempt in range(1, retries + 1):
-
         try:
-
             log(f"🌐 Opening page ({attempt}/{retries})")
 
             page.goto(
                 url,
-                wait_until="networkidle",
-                timeout=120000
+                wait_until="domcontentloaded",
+                timeout=60000
             )
 
-            time.sleep(8)
+            time.sleep(5)
 
             return
 
         except PlaywrightTimeout:
+            log(f"⚠️ Timeout attempt {attempt}")
+            time.sleep(3)
 
-            log("⚠️ Timeout retrying...")
-            time.sleep(5)
-
-    raise Exception("❌ Failed opening page")
+    raise Exception("❌ Failed open page")
 
 
-# ─────────────────────────────
-# Close Popup
-# ─────────────────────────────
 def close_modal(page):
-
     selectors = [
         "[data-e2e='modal-close-inner-button']",
         "button[aria-label='Close']",
@@ -168,19 +133,16 @@ def close_modal(page):
         "button:has-text('OK')",
     ]
 
-    for selector in selectors:
-
+    for sel in selectors:
         try:
+            btn = page.locator(sel).first
 
-            button = page.locator(selector).first
+            if btn.is_visible(timeout=1500):
+                btn.click(force=True)
 
-            if button.is_visible(timeout=2000):
+                log(f"✅ Modal closed: {sel}")
 
-                button.click(force=True)
-
-                log(f"✅ Closed popup: {selector}")
-
-                time.sleep(2)
+                time.sleep(1)
 
                 return True
 
@@ -190,86 +152,54 @@ def close_modal(page):
     return False
 
 
-# ─────────────────────────────
-# Find Upload Input
-# ─────────────────────────────
 def find_upload_input(page):
-
     log("🔍 Finding upload input...")
 
-    selectors = [
-        "input[type='file']",
-        "input[accept*='video']",
-    ]
+    file_input = page.locator("input[type='file']").first
 
-    for selector in selectors:
+    file_input.wait_for(
+        state="attached",
+        timeout=20000
+    )
 
-        try:
+    log("✅ Upload input found")
 
-            file_input = page.locator(selector).first
-
-            file_input.wait_for(
-                state="attached",
-                timeout=30000
-            )
-
-            log(f"✅ Upload input found: {selector}")
-
-            return file_input
-
-        except:
-            pass
-
-    raise Exception("❌ Upload input not found")
+    return file_input
 
 
-# ─────────────────────────────
-# Wait Upload Complete
-# ─────────────────────────────
-def wait_for_upload_complete(page):
-
-    log("⏳ Waiting TikTok upload processing...")
-
-    upload_done_selectors = [
-        "button:has-text('Post')",
-        "button:has-text('Publish')",
-        "[data-e2e='post-video-button']",
-    ]
+def wait_for_upload_complete(page, timeout=180):
+    log("⏳ Waiting upload process...")
 
     start = time.time()
 
-    while time.time() - start < 300:
+    while time.time() - start < timeout:
 
-        for selector in upload_done_selectors:
+        progress = False
 
+        selectors = [
+            "[class*='progress']",
+            "[class*='uploading']",
+            "[class*='Progress']",
+        ]
+
+        for sel in selectors:
             try:
-
-                button = page.locator(selector).first
-
-                if button.is_visible():
-
-                    if button.is_enabled():
-
-                        log("✅ Upload processing finished")
-
-                        time.sleep(10)
-
-                        return True
-
+                if page.locator(sel).count() > 0:
+                    progress = True
+                    break
             except:
                 pass
 
-        log("⏳ Still processing...")
-        time.sleep(5)
+        if not progress:
+            log("✅ Upload completed")
+            break
 
-    raise Exception("❌ Upload processing timeout")
+        time.sleep(2)
+
+    time.sleep(5)
 
 
-# ─────────────────────────────
-# Fill Caption
-# ─────────────────────────────
 def fill_caption(page, text):
-
     selectors = [
         "div.public-DraftEditor-content",
         "[data-e2e='caption-input']",
@@ -277,9 +207,7 @@ def fill_caption(page, text):
     ]
 
     for selector in selectors:
-
         try:
-
             box = page.locator(selector).first
 
             if not box.is_visible(timeout=5000):
@@ -290,77 +218,31 @@ def fill_caption(page, text):
             time.sleep(1)
 
             page.keyboard.press("Control+a")
+
+            time.sleep(0.5)
+
             page.keyboard.press("Backspace")
 
             time.sleep(1)
 
             box.press_sequentially(
                 text,
-                delay=50
+                delay=60
             )
+
+            time.sleep(2)
 
             log("✅ Caption filled")
 
-            time.sleep(2)
-
             return True
 
-        except Exception as error:
-
-            log(f"⚠️ Caption failed: {error}")
+        except Exception as e:
+            log(f"⚠️ Caption failed: {e}")
 
     return False
 
 
-# ─────────────────────────────
-# Click Post Button
-# ─────────────────────────────
-def click_post_button(page):
-
-    log("🚀 Finding Post button...")
-
-    selectors = [
-        "[data-e2e='post-video-button']",
-        "button:has-text('Post')",
-        "button:has-text('Publish')",
-    ]
-
-    for selector in selectors:
-
-        try:
-
-            button = page.locator(selector).first
-
-            if not button.is_visible(timeout=5000):
-                continue
-
-            if not button.is_enabled():
-                continue
-
-            button.scroll_into_view_if_needed()
-
-            time.sleep(2)
-
-            page.screenshot(path="before_post_click.png")
-
-            button.click(force=True)
-
-            log(f"✅ Post clicked: {selector}")
-
-            return True
-
-        except Exception as error:
-
-            log(f"⚠️ Post failed: {error}")
-
-    return False
-
-
-# ─────────────────────────────
-# Click Draft Button
-# ─────────────────────────────
 def click_draft_button(page):
-
     log("📂 Finding Draft button...")
 
     selectors = [
@@ -369,25 +251,25 @@ def click_draft_button(page):
         "button:has-text('Save draft')",
     ]
 
-    for selector in selectors:
-
+    for sel in selectors:
         try:
+            btn = page.locator(sel).first
 
-            button = page.locator(selector).first
-
-            if not button.is_visible(timeout=3000):
+            if not btn.is_visible(timeout=3000):
                 continue
 
-            if not button.is_enabled():
+            disabled = btn.get_attribute("disabled")
+
+            if disabled is not None:
                 continue
 
-            button.scroll_into_view_if_needed()
+            btn.scroll_into_view_if_needed()
 
             time.sleep(1)
 
-            button.click(force=True)
+            btn.click(force=True)
 
-            log(f"✅ Draft clicked: {selector}")
+            log(f"✅ Draft clicked: {sel}")
 
             return True
 
@@ -397,21 +279,13 @@ def click_draft_button(page):
     return False
 
 
-# ─────────────────────────────
-# Upload Function
-# ─────────────────────────────
-def upload_to_tiktok(
-    video_path,
-    cookies_path,
-    description="",
-    post=False
-):
+def upload_to_tiktok(video_path, cookies_path, description=""):
 
-    with sync_playwright() as playwright:
+    with sync_playwright() as p:
 
-        log("🌐 Launching browser...")
+        log("🌐 Launching Chromium XVFB mode...")
 
-        browser = playwright.chromium.launch(
+        browser = p.chromium.launch(
             headless=False,
             channel="chromium",
             args=[
@@ -421,15 +295,10 @@ def upload_to_tiktok(
                 "--disable-infobars",
                 "--window-size=1400,900",
                 "--start-maximized",
-                "--disable-features=IsolateOrigins,site-per-process",
-                "--disable-site-isolation-trials",
-                "--disable-web-security",
-                "--disable-features=AutomationControlled",
             ]
         )
 
         context = browser.new_context(
-
             viewport={
                 "width": 1400,
                 "height": 900
@@ -446,7 +315,6 @@ def upload_to_tiktok(
             )
         )
 
-        # Anti Detection
         context.add_init_script("""
         Object.defineProperty(navigator, 'webdriver', {
             get: () => undefined
@@ -465,7 +333,6 @@ def upload_to_tiktok(
         });
         """)
 
-        # Load Cookies
         log("🍪 Loading cookies...")
 
         cookies = parse_cookies(cookies_path)
@@ -474,13 +341,9 @@ def upload_to_tiktok(
 
         page = context.new_page()
 
-        page.set_default_timeout(120000)
+        page.set_default_timeout(60000)
 
-        # Open Upload Page
-        goto_with_retry(
-            page,
-            TIKTOK_UPLOAD_URL
-        )
+        goto_with_retry(page, TIKTOK_UPLOAD_URL)
 
         if "login" in page.url.lower():
             raise Exception("❌ Login failed. Invalid cookies")
@@ -489,7 +352,6 @@ def upload_to_tiktok(
 
         close_modal(page)
 
-        # Upload File
         file_input = find_upload_input(page)
 
         log(f"📤 Uploading video: {video_path}")
@@ -498,99 +360,33 @@ def upload_to_tiktok(
             str(video_path.resolve())
         )
 
-        time.sleep(10)
+        time.sleep(8)
 
-        # Wait upload complete
         wait_for_upload_complete(page)
 
         close_modal(page)
 
-        # Caption
         if description:
             fill_caption(page, description)
 
-        time.sleep(5)
+        time.sleep(3)
 
-        # POST
-        if post:
+        drafted = click_draft_button(page)
 
-            posted = click_post_button(page)
+        if drafted:
+            log("⏳ Waiting save draft...")
+            time.sleep(15)
 
-            page.screenshot(path="after_post_click.png")
+            log("✅ VIDEO SAVED TO DRAFT")
 
-            html = page.content()
-
-            with open(
-                "debug_after_post.html",
-                "w",
-                encoding="utf-8"
-            ) as f:
-                f.write(html)
-
-            if posted:
-
-                log("⏳ Waiting publish response...")
-
-                try:
-
-                    page.wait_for_url(
-                        "**/creator-center/**",
-                        timeout=120000
-                    )
-
-                    log("✅ Redirect detected")
-
-                except:
-
-                    log("⚠️ No redirect detected")
-
-                time.sleep(60)
-
-                current_url = page.url
-
-                log(f"📍 Current URL: {current_url}")
-
-                page.screenshot(
-                    path="publish_result.png"
-                )
-
-                if "upload" not in current_url:
-
-                    log("✅ VIDEO LIKELY POSTED")
-
-                else:
-
-                    log("❌ STILL ON UPLOAD PAGE")
-
-            else:
-
-                log("❌ Post button not found")
-
-        # DRAFT
         else:
+            log("❌ Draft button not found")
 
-            drafted = click_draft_button(page)
-
-            if drafted:
-
-                log("⏳ Waiting save draft...")
-
-                time.sleep(20)
-
-                log("✅ VIDEO SAVED TO DRAFT")
-
-            else:
-
-                log("❌ Draft button not found")
-
-        time.sleep(10)
+        time.sleep(5)
 
         browser.close()
 
 
-# ─────────────────────────────
-# Main
-# ─────────────────────────────
 def main():
 
     parser = argparse.ArgumentParser()
@@ -610,32 +406,23 @@ def main():
         default="Video keren 🚀 #fyp #viral"
     )
 
-    parser.add_argument(
-        "--post",
-        default="false"
-    )
-
     args = parser.parse_args()
 
     if not Path(args.cookies).exists():
-
         log("❌ Cookies file not found")
         sys.exit(1)
 
     try:
-
         prepare_video(args.url)
 
-    except Exception as error:
-
-        log(f"❌ Prepare video failed: {error}")
+    except Exception as e:
+        log(f"❌ Prepare video failed: {e}")
         sys.exit(1)
 
     upload_to_tiktok(
         VIDEO_FILE,
         args.cookies,
-        args.description,
-        args.post.lower() == "true"
+        args.description
     )
 
 
