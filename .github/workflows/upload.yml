@@ -181,7 +181,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: final-video
-          path: media/*.mp4
+          path: |
+            media/*.mp4
+            *.png
 
       # ─────────────────────────────
       # Cleanup
