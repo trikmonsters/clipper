@@ -21,6 +21,11 @@ on:
         required: false
         default: 'Video keren! #fyp #viral'
 
+      post_video:
+        description: 'true = langsung post, false = save draft'
+        required: true
+        default: 'false'
+
 jobs:
   edit-and-upload:
     runs-on: ubuntu-latest
@@ -50,7 +55,9 @@ jobs:
           set -e
 
           sudo apt-get update -y
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y \
+            ffmpeg \
+            xvfb
 
           pip install requests playwright
 
@@ -161,10 +168,11 @@ jobs:
 
           echo "Starting uploader..."
 
-          python3 uploader.py \
+          xvfb-run -a python3 uploader.py \
             --url "$(pwd)/media/video.mp4" \
             --description "${{ github.event.inputs.tiktok_description }}" \
-            --cookies cookies.json
+            --cookies cookies.json \
+            --post "${{ github.event.inputs.post_video }}"
 
       # ─────────────────────────────
       # Upload Artifact
