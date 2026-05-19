@@ -104,13 +104,25 @@ def goto_with_retry(page, url: str, retries: int = 3):
 
 
 def close_modal(page):
+    """Tutup semua modal/popup yang mungkin muncul"""
     selectors = [
         "[data-e2e='modal-close-inner-button']",
         "button[aria-label='Close']",
+        "button[aria-label='close']",
         "button:has-text('Close')",
         "button:has-text('Cancel')",
         "button:has-text('OK')",
+        "button:has-text('Got it')",
+        "button:has-text('I understand')",
+        "button:has-text('Dismiss')",
+        "button:has-text('Skip')",
+        "[data-e2e='close-button']",
+        ".modal-close",
+        "[class*='closeButton']",
+        "[class*='close-btn']",
     ]
+
+    closed_any = False
 
     for sel in selectors:
         try:
@@ -119,11 +131,57 @@ def close_modal(page):
                 btn.click(force=True)
                 log(f"✅ Modal closed: {sel}")
                 time.sleep(1)
-                return True
+                closed_any = True
         except:
             pass
 
-    return False
+    return closed_any
+
+
+def close_content_popup(page):
+    """Tutup popup konten / copyright / community guidelines sebelum caption"""
+    log("🔍 Checking content popups...")
+
+    popup_selectors = [
+        # Copyright popup
+        "button:has-text('Continue')",
+        "button:has-text('I agree')",
+        "button:has-text('Confirm')",
+        "button:has-text('Understood')",
+        "button:has-text('Got it')",
+        "button:has-text('OK')",
+        "button:has-text('Done')",
+        # TikTok specific
+        "[data-e2e='content-check-confirm']",
+        "[data-e2e='copyright-confirm']",
+        "[data-e2e='guideline-confirm']",
+        "[data-e2e='alert-confirm-button']",
+        # Generic dialog confirm
+        "div[role='dialog'] button:has-text('Confirm')",
+        "div[role='dialog'] button:has-text('Continue')",
+        "div[role='dialog'] button:has-text('OK')",
+        "div[role='dialog'] button:has-text('Done')",
+        "div[role='alertdialog'] button",
+    ]
+
+    closed_any = False
+
+    for sel in popup_selectors:
+        try:
+            btn = page.locator(sel).first
+            if btn.is_visible(timeout=2000):
+                btn_text = btn.inner_text().strip()
+                btn.click(force=True)
+                log(f"✅ Content popup closed: '{btn_text}' | {sel}")
+                time.sleep(1.5)
+                closed_any = True
+        except:
+            pass
+
+    if not closed_any:
+        log("ℹ️ No content popup found")
+
+    return closed_any
 
 
 def find_upload_input(page):
@@ -140,10 +198,12 @@ def wait_for_upload_complete(page, timeout=180):
 
     while time.time() - start < timeout:
         progress = False
+
         selectors = [
             "[class*='progress']",
             "[class*='uploading']",
             "[class*='Progress']",
+            "[class*='loading']",
         ]
 
         for sel in selectors:
@@ -160,10 +220,14 @@ def wait_for_upload_complete(page, timeout=180):
 
         time.sleep(2)
 
-    time.sleep(5)
+    # Tunggu ekstra agar TikTok proses video sepenuhnya
+    log("⏳ Waiting for TikTok to process video...")
+    time.sleep(8)
 
 
 def fill_caption(page, text):
+    log("✏️ Filling caption...")
+
     selectors = [
         "div.public-DraftEditor-content",
         "[data-e2e='caption-input']",
@@ -193,8 +257,9 @@ def fill_caption(page, text):
             return True
 
         except Exception as e:
-            log(f"⚠️ Caption failed: {e}")
+            log(f"⚠️ Caption failed with selector {selector}: {e}")
 
+    log("❌ All caption selectors failed")
     return False
 
 
@@ -206,6 +271,7 @@ def click_post_button(page):
         "button[class*='btn-post']",
         "button[class*='submit']:not([class*='draft'])",
         "button:has-text('Post'):not(:has-text('Draft'))",
+        "button:has-text('Publish')",
     ]
 
     for sel in selectors:
@@ -327,6 +393,7 @@ def upload_to_tiktok(video_path, cookies_path, description=""):
         page = context.new_page()
         page.set_default_timeout(60000)
 
+        # ── Buka halaman upload ──
         goto_with_retry(page, TIKTOK_UPLOAD_URL)
 
         if "login" in page.url.lower():
@@ -334,27 +401,52 @@ def upload_to_tiktok(video_path, cookies_path, description=""):
 
         log("✅ Login success")
 
+        # ── Tutup modal awal ──
         close_modal(page)
+        time.sleep(2)
 
+        # ── Upload file video ──
         file_input = find_upload_input(page)
-
         log(f"📤 Uploading video: {video_path}")
         file_input.set_input_files(str(video_path.resolve()))
 
         time.sleep(8)
 
+        # ── Tunggu upload selesai ──
         wait_for_upload_complete(page)
 
+        # ── Tutup modal setelah upload ──
         close_modal(page)
+        time.sleep(2)
 
+        # ── Tutup popup konten (copyright, guidelines, dll) ──
+        close_content_popup(page)
+        time.sleep(2)
+
+        # ── Tutup modal sekali lagi untuk pastikan bersih ──
+        close_modal(page)
+        time.sleep(2)
+
+        # ── Screenshot sebelum isi caption ──
+        page.screenshot(path="before_caption.png")
+        log("📸 Screenshot saved: before_caption.png")
+
+        # ── Isi caption ──
         if description:
             fill_caption(page, description)
+            time.sleep(2)
 
-        time.sleep(3)
+        # ── Tutup popup yang mungkin muncul setelah caption ──
+        close_content_popup(page)
+        time.sleep(1)
+        close_modal(page)
+        time.sleep(2)
 
+        # ── Screenshot sebelum post ──
         page.screenshot(path="before_post.png")
         log("📸 Screenshot saved: before_post.png")
 
+        # ── Klik tombol Post ──
         posted = click_post_button(page)
 
         if posted:
@@ -399,7 +491,11 @@ def main():
         log(f"❌ Prepare video failed: {e}")
         sys.exit(1)
 
-    upload_to_tiktok(VIDEO_FILE, args.cookies, args.description)
+    upload_to_tiktok(
+        VIDEO_FILE,
+        args.cookies,
+        args.description
+    )
 
 
 if __name__ == "__main__":
