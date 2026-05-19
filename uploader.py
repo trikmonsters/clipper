@@ -13,7 +13,7 @@ from playwright.sync_api import (
 )
 
 TIKTOK_UPLOAD_URL = "https://www.tiktok.com/tiktokstudio/upload?lang=en"
-VIDEO_FILE = Path(" .mp4")
+VIDEO_FILE = Path("video.mp4")
 
 
 def log(msg: str):
