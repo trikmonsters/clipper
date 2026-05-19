@@ -18,6 +18,9 @@ TIKTOK_UPLOAD_URL = "https://www.tiktok.com/tiktokstudio/upload?lang=en"
 VIDEO_FILE = Path("video.mp4")
 
 
+# ─────────────────────────────
+# Logger
+# ─────────────────────────────
 def log(message):
     print(f"[TikTokUploader] {message}", flush=True)
 
@@ -34,7 +37,11 @@ def download_video(url, output_path):
         stream=True,
         timeout=120,
         headers={
-            "User-Agent": "Mozilla/5.0"
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            )
         }
     )
 
@@ -132,18 +139,18 @@ def goto_with_retry(page, url, retries=3):
 
             page.goto(
                 url,
-                wait_until="domcontentloaded",
-                timeout=60000
+                wait_until="networkidle",
+                timeout=120000
             )
 
-            time.sleep(5)
+            time.sleep(8)
 
             return
 
         except PlaywrightTimeout:
 
             log("⚠️ Timeout retrying...")
-            time.sleep(3)
+            time.sleep(5)
 
     raise Exception("❌ Failed opening page")
 
@@ -167,13 +174,13 @@ def close_modal(page):
 
             button = page.locator(selector).first
 
-            if button.is_visible(timeout=1500):
+            if button.is_visible(timeout=2000):
 
                 button.click(force=True)
 
                 log(f"✅ Closed popup: {selector}")
 
-                time.sleep(1)
+                time.sleep(2)
 
                 return True
 
@@ -190,58 +197,72 @@ def find_upload_input(page):
 
     log("🔍 Finding upload input...")
 
-    file_input = page.locator(
-        "input[type='file']"
-    ).first
+    selectors = [
+        "input[type='file']",
+        "input[accept*='video']",
+    ]
 
-    file_input.wait_for(
-        state="attached",
-        timeout=20000
-    )
+    for selector in selectors:
 
-    log("✅ Upload input found")
+        try:
 
-    return file_input
+            file_input = page.locator(selector).first
+
+            file_input.wait_for(
+                state="attached",
+                timeout=30000
+            )
+
+            log(f"✅ Upload input found: {selector}")
+
+            return file_input
+
+        except:
+            pass
+
+    raise Exception("❌ Upload input not found")
 
 
 # ─────────────────────────────
 # Wait Upload Complete
 # ─────────────────────────────
-def wait_for_upload_complete(page, timeout=180):
+def wait_for_upload_complete(page):
 
-    log("⏳ Waiting upload process...")
+    log("⏳ Waiting TikTok upload processing...")
+
+    upload_done_selectors = [
+        "button:has-text('Post')",
+        "button:has-text('Publish')",
+        "[data-e2e='post-video-button']",
+    ]
 
     start = time.time()
 
-    while time.time() - start < timeout:
+    while time.time() - start < 300:
 
-        uploading = False
-
-        selectors = [
-            "[class*='progress']",
-            "[class*='uploading']",
-            "[class*='Progress']",
-        ]
-
-        for selector in selectors:
+        for selector in upload_done_selectors:
 
             try:
 
-                if page.locator(selector).count() > 0:
-                    uploading = True
-                    break
+                button = page.locator(selector).first
+
+                if button.is_visible():
+
+                    if button.is_enabled():
+
+                        log("✅ Upload processing finished")
+
+                        time.sleep(10)
+
+                        return True
 
             except:
                 pass
 
-        if not uploading:
+        log("⏳ Still processing...")
+        time.sleep(5)
 
-            log("✅ Upload completed")
-            break
-
-        time.sleep(2)
-
-    time.sleep(5)
+    raise Exception("❌ Upload processing timeout")
 
 
 # ─────────────────────────────
@@ -269,14 +290,13 @@ def fill_caption(page, text):
             time.sleep(1)
 
             page.keyboard.press("Control+a")
-
             page.keyboard.press("Backspace")
 
             time.sleep(1)
 
             box.press_sequentially(
                 text,
-                delay=60
+                delay=50
             )
 
             log("✅ Caption filled")
@@ -293,7 +313,51 @@ def fill_caption(page, text):
 
 
 # ─────────────────────────────
-# Draft Button
+# Click Post Button
+# ─────────────────────────────
+def click_post_button(page):
+
+    log("🚀 Finding Post button...")
+
+    selectors = [
+        "[data-e2e='post-video-button']",
+        "button:has-text('Post')",
+        "button:has-text('Publish')",
+    ]
+
+    for selector in selectors:
+
+        try:
+
+            button = page.locator(selector).first
+
+            if not button.is_visible(timeout=5000):
+                continue
+
+            if not button.is_enabled():
+                continue
+
+            button.scroll_into_view_if_needed()
+
+            time.sleep(2)
+
+            page.screenshot(path="before_post_click.png")
+
+            button.click(force=True)
+
+            log(f"✅ Post clicked: {selector}")
+
+            return True
+
+        except Exception as error:
+
+            log(f"⚠️ Post failed: {error}")
+
+    return False
+
+
+# ─────────────────────────────
+# Click Draft Button
 # ─────────────────────────────
 def click_draft_button(page):
 
@@ -314,9 +378,7 @@ def click_draft_button(page):
             if not button.is_visible(timeout=3000):
                 continue
 
-            disabled = button.get_attribute("disabled")
-
-            if disabled is not None:
+            if not button.is_enabled():
                 continue
 
             button.scroll_into_view_if_needed()
@@ -326,49 +388,6 @@ def click_draft_button(page):
             button.click(force=True)
 
             log(f"✅ Draft clicked: {selector}")
-
-            return True
-
-        except:
-            pass
-
-    return False
-
-
-# ─────────────────────────────
-# Post Button
-# ─────────────────────────────
-def click_post_button(page):
-
-    log("🚀 Finding Post button...")
-
-    selectors = [
-        "[data-e2e='post-video-button']",
-        "button:has-text('Post')",
-        "button:has-text('Publish')",
-    ]
-
-    for selector in selectors:
-
-        try:
-
-            button = page.locator(selector).first
-
-            if not button.is_visible(timeout=3000):
-                continue
-
-            disabled = button.get_attribute("disabled")
-
-            if disabled is not None:
-                continue
-
-            button.scroll_into_view_if_needed()
-
-            time.sleep(1)
-
-            button.click(force=True)
-
-            log(f"✅ Post clicked: {selector}")
 
             return True
 
@@ -390,7 +409,7 @@ def upload_to_tiktok(
 
     with sync_playwright() as playwright:
 
-        log("🌐 Launching Chromium XVFB mode...")
+        log("🌐 Launching browser...")
 
         browser = playwright.chromium.launch(
             headless=False,
@@ -402,6 +421,10 @@ def upload_to_tiktok(
                 "--disable-infobars",
                 "--window-size=1400,900",
                 "--start-maximized",
+                "--disable-features=IsolateOrigins,site-per-process",
+                "--disable-site-isolation-trials",
+                "--disable-web-security",
+                "--disable-features=AutomationControlled",
             ]
         )
 
@@ -449,10 +472,9 @@ def upload_to_tiktok(
 
         context.add_cookies(cookies)
 
-        # Create Page
         page = context.new_page()
 
-        page.set_default_timeout(60000)
+        page.set_default_timeout(120000)
 
         # Open Upload Page
         goto_with_retry(
@@ -476,8 +498,9 @@ def upload_to_tiktok(
             str(video_path.resolve())
         )
 
-        time.sleep(8)
+        time.sleep(10)
 
+        # Wait upload complete
         wait_for_upload_complete(page)
 
         close_modal(page)
@@ -486,26 +509,64 @@ def upload_to_tiktok(
         if description:
             fill_caption(page, description)
 
-        time.sleep(3)
+        time.sleep(5)
 
-        # Draft / Post
+        # POST
         if post:
 
             posted = click_post_button(page)
-            page.screenshot(path="after_post.png")
+
+            page.screenshot(path="after_post_click.png")
+
+            html = page.content()
+
+            with open(
+                "debug_after_post.html",
+                "w",
+                encoding="utf-8"
+            ) as f:
+                f.write(html)
 
             if posted:
 
-                log("⏳ Waiting publish process...")
+                log("⏳ Waiting publish response...")
 
-                time.sleep(20)
+                try:
 
-                log("✅ VIDEO SUCCESSFULLY POSTED")
+                    page.wait_for_url(
+                        "**/creator-center/**",
+                        timeout=120000
+                    )
+
+                    log("✅ Redirect detected")
+
+                except:
+
+                    log("⚠️ No redirect detected")
+
+                time.sleep(60)
+
+                current_url = page.url
+
+                log(f"📍 Current URL: {current_url}")
+
+                page.screenshot(
+                    path="publish_result.png"
+                )
+
+                if "upload" not in current_url:
+
+                    log("✅ VIDEO LIKELY POSTED")
+
+                else:
+
+                    log("❌ STILL ON UPLOAD PAGE")
 
             else:
 
                 log("❌ Post button not found")
 
+        # DRAFT
         else:
 
             drafted = click_draft_button(page)
@@ -514,7 +575,7 @@ def upload_to_tiktok(
 
                 log("⏳ Waiting save draft...")
 
-                time.sleep(15)
+                time.sleep(20)
 
                 log("✅ VIDEO SAVED TO DRAFT")
 
@@ -522,7 +583,7 @@ def upload_to_tiktok(
 
                 log("❌ Draft button not found")
 
-        time.sleep(5)
+        time.sleep(10)
 
         browser.close()
 
