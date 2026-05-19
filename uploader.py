@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import time
+import random
 import requests
 import argparse
 import shutil
@@ -18,6 +19,24 @@ VIDEO_FILE = Path("video.mp4")
 
 def log(msg: str):
     print(f"[TikTok Uploader] {msg}", flush=True)
+
+
+def human_delay(min_sec=1.5, max_sec=4.0):
+    """Jeda acak seperti manusia"""
+    delay = random.uniform(min_sec, max_sec)
+    time.sleep(delay)
+
+
+def human_mouse_move(page):
+    """Gerak mouse acak seperti manusia"""
+    try:
+        for _ in range(random.randint(2, 4)):
+            x = random.randint(200, 1200)
+            y = random.randint(100, 800)
+            page.mouse.move(x, y, steps=random.randint(5, 15))
+            time.sleep(random.uniform(0.1, 0.4))
+    except:
+        pass
 
 
 def download_video(url: str, output: Path):
@@ -93,12 +112,12 @@ def goto_with_retry(page, url: str, retries: int = 3):
         try:
             log(f"🌐 Opening page ({attempt}/{retries})")
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            time.sleep(5)
+            human_delay(4, 7)
             return
 
         except PlaywrightTimeout:
             log(f"⚠️ Timeout attempt {attempt}")
-            time.sleep(3)
+            human_delay(3, 5)
 
     raise Exception("❌ Failed open page")
 
@@ -128,9 +147,10 @@ def close_modal(page):
         try:
             btn = page.locator(sel).first
             if btn.is_visible(timeout=1500):
+                human_mouse_move(page)
                 btn.click(force=True)
                 log(f"✅ Modal closed: {sel}")
-                time.sleep(1)
+                human_delay(1, 2)
                 closed_any = True
         except:
             pass
@@ -143,7 +163,6 @@ def close_content_popup(page):
     log("🔍 Checking content popups...")
 
     popup_selectors = [
-        # Copyright popup
         "button:has-text('Continue')",
         "button:has-text('I agree')",
         "button:has-text('Confirm')",
@@ -151,12 +170,10 @@ def close_content_popup(page):
         "button:has-text('Got it')",
         "button:has-text('OK')",
         "button:has-text('Done')",
-        # TikTok specific
         "[data-e2e='content-check-confirm']",
         "[data-e2e='copyright-confirm']",
         "[data-e2e='guideline-confirm']",
         "[data-e2e='alert-confirm-button']",
-        # Generic dialog confirm
         "div[role='dialog'] button:has-text('Confirm')",
         "div[role='dialog'] button:has-text('Continue')",
         "div[role='dialog'] button:has-text('OK')",
@@ -171,9 +188,10 @@ def close_content_popup(page):
             btn = page.locator(sel).first
             if btn.is_visible(timeout=2000):
                 btn_text = btn.inner_text().strip()
+                human_mouse_move(page)
                 btn.click(force=True)
                 log(f"✅ Content popup closed: '{btn_text}' | {sel}")
-                time.sleep(1.5)
+                human_delay(1.5, 3)
                 closed_any = True
         except:
             pass
@@ -192,7 +210,7 @@ def find_upload_input(page):
     return file_input
 
 
-def wait_for_upload_complete(page, timeout=180):
+def wait_for_upload_complete(page, timeout=240):
     log("⏳ Waiting upload process...")
     start = time.time()
 
@@ -220,9 +238,8 @@ def wait_for_upload_complete(page, timeout=180):
 
         time.sleep(2)
 
-    # Tunggu ekstra agar TikTok proses video sepenuhnya
-    log("⏳ Waiting for TikTok to process video...")
-    time.sleep(8)
+    log("⏳ Waiting for TikTok to fully process video...")
+    human_delay(8, 12)
 
 
 def fill_caption(page, text):
@@ -241,17 +258,21 @@ def fill_caption(page, text):
             if not box.is_visible(timeout=5000):
                 continue
 
+            human_mouse_move(page)
             box.click(force=True)
-            time.sleep(1)
+            human_delay(1, 2)
 
             page.keyboard.press("Control+a")
-            time.sleep(0.5)
+            human_delay(0.3, 0.7)
 
             page.keyboard.press("Backspace")
-            time.sleep(1)
+            human_delay(0.8, 1.5)
 
-            box.press_sequentially(text, delay=60)
-            time.sleep(2)
+            # Ketik per karakter dengan delay acak seperti manusia
+            for char in text:
+                box.type(char, delay=random.randint(40, 120))
+
+            human_delay(1.5, 3)
 
             log("✅ Caption filled")
             return True
@@ -295,7 +316,10 @@ def click_post_button(page):
                     continue
 
                 btn.scroll_into_view_if_needed()
-                time.sleep(2)
+                human_delay(1.5, 3)
+
+                # Gerak mouse ke tombol dulu sebelum klik
+                human_mouse_move(page)
 
                 page.screenshot(path="confirm_post_button.png")
                 log("📸 confirm_post_button.png saved")
@@ -310,7 +334,7 @@ def click_post_button(page):
     return False
 
 
-def wait_for_post_success(page, timeout=30):
+def wait_for_post_success(page, timeout=45):
     log("🔍 Validating post success...")
     start = time.time()
 
@@ -359,6 +383,11 @@ def upload_to_tiktok(video_path, cookies_path, description=""):
                 "--disable-infobars",
                 "--window-size=1400,900",
                 "--start-maximized",
+                "--disable-extensions",
+                "--disable-plugins-discovery",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-default-apps",
             ]
         )
 
@@ -373,17 +402,82 @@ def upload_to_tiktok(video_path, cookies_path, description=""):
             )
         )
 
+        # ── Anti-detect script yang lebih kuat ──
         context.add_init_script("""
+        // Hapus webdriver flag
         Object.defineProperty(navigator, 'webdriver', {
-            get: () => undefined
+            get: () => undefined,
+            configurable: true
         });
-        window.chrome = { runtime: {} };
+
+        // Patch CDP leak
+        delete navigator.__proto__.webdriver;
+
+        // Simulasi Chrome asli
+        window.chrome = {
+            runtime: {
+                connect: () => {},
+                sendMessage: () => {},
+                onMessage: { addListener: () => {} }
+            },
+            loadTimes: () => {},
+            csi: () => {},
+        };
+
+        // Bahasa & plugin
         Object.defineProperty(navigator, 'languages', {
-            get: () => ['en-US', 'en']
+            get: () => ['en-US', 'en', 'id']
         });
+
         Object.defineProperty(navigator, 'plugins', {
-            get: () => [1, 2, 3]
+            get: () => {
+                const arr = [
+                    { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+                    { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+                    { name: 'Native Client', filename: 'internal-nacl-plugin' },
+                ];
+                arr.__proto__ = PluginArray.prototype;
+                return arr;
+            }
         });
+
+        // Patch permissions API
+        const originalQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters) => (
+            parameters.name === 'notifications' ?
+                Promise.resolve({ state: Notification.permission }) :
+                originalQuery(parameters)
+        );
+
+        // Canvas fingerprint randomisasi
+        const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+        HTMLCanvasElement.prototype.toDataURL = function(type) {
+            if (type === 'image/png' && this.width === 220 && this.height === 30) {
+                return originalToDataURL.apply(this, arguments);
+            }
+            const context = this.getContext('2d');
+            if (context) {
+                const imageData = context.getImageData(0, 0, this.width, this.height);
+                for (let i = 0; i < imageData.data.length; i += 100) {
+                    imageData.data[i] = imageData.data[i] ^ (Math.random() * 2 | 0);
+                }
+                context.putImageData(imageData, 0, 0);
+            }
+            return originalToDataURL.apply(this, arguments);
+        };
+
+        // Hardware concurrency & memory realistis
+        Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+        Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+        Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+
+        // Screen realistis
+        Object.defineProperty(screen, 'width', { get: () => 1920 });
+        Object.defineProperty(screen, 'height', { get: () => 1080 });
+        Object.defineProperty(screen, 'availWidth', { get: () => 1920 });
+        Object.defineProperty(screen, 'availHeight', { get: () => 1040 });
+        Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
+        Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
         """)
 
         log("🍪 Loading cookies...")
@@ -401,31 +495,39 @@ def upload_to_tiktok(video_path, cookies_path, description=""):
 
         log("✅ Login success")
 
+        # Simulasi aktivitas manusia setelah login
+        human_mouse_move(page)
+        human_delay(2, 4)
+
         # ── Tutup modal awal ──
         close_modal(page)
-        time.sleep(2)
+        human_delay(2, 3)
 
         # ── Upload file video ──
         file_input = find_upload_input(page)
         log(f"📤 Uploading video: {video_path}")
+
+        human_mouse_move(page)
+        human_delay(1, 2)
+
         file_input.set_input_files(str(video_path.resolve()))
 
-        time.sleep(8)
+        human_delay(8, 12)
 
         # ── Tunggu upload selesai ──
         wait_for_upload_complete(page)
 
         # ── Tutup modal setelah upload ──
         close_modal(page)
-        time.sleep(2)
+        human_delay(2, 4)
 
-        # ── Tutup popup konten (copyright, guidelines, dll) ──
+        # ── Tutup popup konten ──
         close_content_popup(page)
-        time.sleep(2)
+        human_delay(2, 3)
 
-        # ── Tutup modal sekali lagi untuk pastikan bersih ──
+        # ── Tutup modal sekali lagi ──
         close_modal(page)
-        time.sleep(2)
+        human_delay(2, 3)
 
         # ── Screenshot sebelum isi caption ──
         page.screenshot(path="before_caption.png")
@@ -434,13 +536,19 @@ def upload_to_tiktok(video_path, cookies_path, description=""):
         # ── Isi caption ──
         if description:
             fill_caption(page, description)
-            time.sleep(2)
+            human_delay(2, 4)
 
-        # ── Tutup popup yang mungkin muncul setelah caption ──
+        # ── Tutup popup setelah caption ──
         close_content_popup(page)
-        time.sleep(1)
+        human_delay(1, 2)
         close_modal(page)
-        time.sleep(2)
+        human_delay(2, 3)
+
+        # ── Scroll sedikit seperti manusia ──
+        page.mouse.wheel(0, random.randint(100, 300))
+        human_delay(1, 2)
+        page.mouse.wheel(0, random.randint(-100, -50))
+        human_delay(1, 2)
 
         # ── Screenshot sebelum post ──
         page.screenshot(path="before_post.png")
@@ -451,7 +559,7 @@ def upload_to_tiktok(video_path, cookies_path, description=""):
 
         if posted:
             log("⏳ Waiting post to publish...")
-            time.sleep(10)
+            human_delay(10, 15)
 
             success = wait_for_post_success(page)
 
@@ -468,7 +576,7 @@ def upload_to_tiktok(video_path, cookies_path, description=""):
             page.screenshot(path="post_failed.png")
             log("📸 Screenshot saved: post_failed.png")
 
-        time.sleep(5)
+        human_delay(5, 8)
         browser.close()
 
 
