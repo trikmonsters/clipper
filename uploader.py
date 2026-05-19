@@ -492,6 +492,7 @@ def upload_to_tiktok(
         if post:
 
             posted = click_post_button(page)
+            page.screenshot(path="after_post.png")
 
             if posted:
 
