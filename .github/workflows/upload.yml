@@ -21,10 +21,7 @@ on:
         required: false
         default: 'Video keren! #fyp #viral'
 
-      post_video:
-        description: 'true = langsung post, false = save draft'
-        required: true
-        default: 'false'
+      
 
 jobs:
   edit-and-upload:
@@ -172,7 +169,7 @@ jobs:
             --url "$(pwd)/media/video.mp4" \
             --description "${{ github.event.inputs.tiktok_description }}" \
             --cookies cookies.json \
-            --post "${{ github.event.inputs.post_video }}"
+          
 
       # ─────────────────────────────
       # Upload Artifact
