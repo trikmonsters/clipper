@@ -21,59 +21,42 @@ on:
 jobs:
   edit-and-upload:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
 
     steps:
 
-      # ─────────────────────────────
-      # Checkout Repository
-      # ─────────────────────────────
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      # ─────────────────────────────
-      # Setup Python
-      # ─────────────────────────────
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
-      # ─────────────────────────────
-      # Install Dependencies
-      # ─────────────────────────────
       - name: Install dependencies
         run: |
           set -e
           sudo apt-get update -y
           sudo apt-get install -y \
             ffmpeg \
-            xvfb
+            xvfb \
+            xdotool \
+            x11-utils
           pip install requests playwright
           playwright install chromium
           playwright install-deps chromium
           ffmpeg -version | head -1
           echo "✅ Dependencies installed"
 
-      # ─────────────────────────────
-      # Prepare Folder
-      # ─────────────────────────────
       - name: Prepare folder
-        run: |
-          mkdir -p media
+        run: mkdir -p media
 
-      # ─────────────────────────────
-      # Buat urls.txt
-      # ─────────────────────────────
       - name: Create URL list
         run: |
           echo "${{ github.event.inputs.video_url }}" > urls.txt
           echo "Generated urls.txt:"
           cat urls.txt
 
-      # ─────────────────────────────
-      # Download Video
-      # ─────────────────────────────
       - name: Run downloader
         run: |
           set -e
@@ -84,9 +67,6 @@ jobs:
           }
           echo "✅ Video downloaded successfully"
 
-      # ─────────────────────────────
-      # Edit Video dengan FFmpeg
-      # ─────────────────────────────
       - name: Edit Video with FFmpeg
         run: |
           set -e
@@ -112,9 +92,6 @@ jobs:
             exit 1
           }
 
-      # ─────────────────────────────
-      # Validasi Cookie Secret
-      # ─────────────────────────────
       - name: Validate cookie secret
         run: |
           set -e
@@ -136,28 +113,22 @@ jobs:
               sys.exit(1)
           "
 
-      # ─────────────────────────────
-      # Upload & Post ke TikTok
-      # ─────────────────────────────
       - name: Upload & Post to TikTok
         run: |
           set -e
           echo "🚀 Starting uploader..."
-          xvfb-run -a python3 uploader.py \
+          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
+            python3 uploader.py \
             --url "$(pwd)/media/${{ github.event.inputs.output_filename }}.mp4" \
             --description "${{ github.event.inputs.tiktok_description }}" \
             --cookies cookies.json
 
-      # ─────────────────────────────
-      # Upload Artifacts (Video + Screenshots)
-      # ─────────────────────────────
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: tiktok-result-${{ github.event.inputs.output_filename }}
           path: |
-            media/*.mp4
             before_caption.png
             before_post.png
             confirm_post_button.png
@@ -165,9 +136,6 @@ jobs:
             post_failed.png
           if-no-files-found: ignore
 
-      # ─────────────────────────────
-      # Cleanup
-      # ─────────────────────────────
       - name: Cleanup
         if: always()
         run: |
