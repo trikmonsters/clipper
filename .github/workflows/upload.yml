@@ -1,25 +1,32 @@
-name: TikTok Upload - Post Video
+name: FFmpeg Edit + TikTok Upload & Post
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: 'URL video (http/https atau path lokal)'
+        description: 'URL video TikTok'
         required: true
+      output_filename:
+        description: 'Nama output tanpa .mp4'
+        required: true
+        default: 'video-001'
       tiktok_description:
         description: 'Caption TikTok'
         required: false
         default: 'Video keren! #fyp #viral'
 
 jobs:
-  upload:
+  edit-and-upload:
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
     steps:
 
       # ─────────────────────────────
-      # Checkout Repo
+      # Checkout Repository
       # ─────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -39,13 +46,74 @@ jobs:
         run: |
           set -e
           sudo apt-get update -y
-          sudo apt-get install -y xvfb
+          sudo apt-get install -y \
+            ffmpeg \
+            xvfb
           pip install requests playwright
           playwright install chromium
           playwright install-deps chromium
+          ffmpeg -version | head -1
+          echo "✅ Dependencies installed"
 
       # ─────────────────────────────
-      # Validate Cookie Secret
+      # Prepare Folder
+      # ─────────────────────────────
+      - name: Prepare folder
+        run: |
+          mkdir -p media
+
+      # ─────────────────────────────
+      # Buat urls.txt
+      # ─────────────────────────────
+      - name: Create URL list
+        run: |
+          echo "${{ github.event.inputs.video_url }}" > urls.txt
+          echo "Generated urls.txt:"
+          cat urls.txt
+
+      # ─────────────────────────────
+      # Download Video
+      # ─────────────────────────────
+      - name: Run downloader
+        run: |
+          set -e
+          python3 download.py
+          ffprobe input_video.mp4 > /dev/null 2>&1 || {
+            echo "❌ Downloaded video is invalid"
+            exit 1
+          }
+          echo "✅ Video downloaded successfully"
+
+      # ─────────────────────────────
+      # Edit Video dengan FFmpeg
+      # ─────────────────────────────
+      - name: Edit Video with FFmpeg
+        run: |
+          set -e
+          OUTPUT_FILE="media/${{ github.event.inputs.output_filename }}.mp4"
+          echo "🎬 Processing video..."
+          ffmpeg -y \
+            -i input_video.mp4 \
+            -vf "scale=2160:3840:flags=lanczos,unsharp=7:7:3.0:7:7:1.2,eq=contrast=1.45:brightness=0.02:saturation=1.05:gamma=1.04,format=yuv420p" \
+            -c:v libx264 \
+            -preset veryslow \
+            -crf 18 \
+            -profile:v high \
+            -level 5.1 \
+            -pix_fmt yuv420p \
+            -movflags +faststart \
+            -c:a aac \
+            -b:a 192k \
+            -ar 48000 \
+            "$OUTPUT_FILE"
+          echo "✅ Video edited: $OUTPUT_FILE"
+          ffprobe "$OUTPUT_FILE" > /dev/null 2>&1 || {
+            echo "❌ Output video invalid"
+            exit 1
+          }
+
+      # ─────────────────────────────
+      # Validasi Cookie Secret
       # ─────────────────────────────
       - name: Validate cookie secret
         run: |
@@ -69,32 +137,28 @@ jobs:
           "
 
       # ─────────────────────────────
-      # Prepare media folder
-      # ─────────────────────────────
-      - name: Prepare media folder
-        run: mkdir -p media
-
-      # ─────────────────────────────
-      # Upload & Post to TikTok
+      # Upload & Post ke TikTok
       # ─────────────────────────────
       - name: Upload & Post to TikTok
         run: |
           set -e
-          echo "Starting uploader..."
+          echo "🚀 Starting uploader..."
           xvfb-run -a python3 uploader.py \
-            --url "${{ github.event.inputs.video_url }}" \
+            --url "$(pwd)/media/${{ github.event.inputs.output_filename }}.mp4" \
             --description "${{ github.event.inputs.tiktok_description }}" \
             --cookies cookies.json
 
       # ─────────────────────────────
-      # Upload Screenshots & Artifacts
+      # Upload Artifacts (Video + Screenshots)
       # ─────────────────────────────
-      - name: Upload screenshots & artifacts
+      - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: tiktok-upload-result
+          name: tiktok-result-${{ github.event.inputs.output_filename }}
           path: |
+            media/*.mp4
+            before_caption.png
             before_post.png
             confirm_post_button.png
             after_post.png
@@ -107,5 +171,5 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          rm -f cookies.json video.mp4
-          echo "🎉 Workflow done"
+          rm -f cookies.json input_video.mp4 urls.txt
+          echo "🎉 Workflow complete"
