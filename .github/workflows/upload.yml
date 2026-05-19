@@ -1,37 +1,25 @@
-name: FFmpeg Edit + TikTok Draft Upload
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+name: TikTok Upload - Post Video
 
 on:
   workflow_dispatch:
     inputs:
-
       video_url:
-        description: 'URL video TikTok'
+        description: 'URL video (http/https atau path lokal)'
         required: true
-
-      output_filename:
-        description: 'Nama output tanpa .mp4'
-        required: true
-        default: 'video-001'
-
       tiktok_description:
         description: 'Caption TikTok'
         required: false
         default: 'Video keren! #fyp #viral'
 
-      
-
 jobs:
-  edit-and-upload:
+  upload:
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
     steps:
 
       # ─────────────────────────────
-      # Checkout Repository
+      # Checkout Repo
       # ─────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -50,137 +38,68 @@ jobs:
       - name: Install dependencies
         run: |
           set -e
-
           sudo apt-get update -y
-          sudo apt-get install -y \
-            ffmpeg \
-            xvfb
-
+          sudo apt-get install -y xvfb
           pip install requests playwright
-
           playwright install chromium
           playwright install-deps chromium
 
-          ffmpeg -version | head -1
-
       # ─────────────────────────────
-      # Prepare Folder
+      # Validate Cookie Secret
       # ─────────────────────────────
-      - name: Prepare folder
-        run: |
-          mkdir -p media
-
-      # ─────────────────────────────
-      # Create urls.txt
-      # ─────────────────────────────
-      - name: Create URL list
-        run: |
-          echo "${{ github.event.inputs.video_url }}" > urls.txt
-
-          echo "Generated urls.txt:"
-          cat urls.txt
-
-      # ─────────────────────────────
-      # Download TikTok Video
-      # ─────────────────────────────
-      - name: Run downloader.py
+      - name: Validate cookie secret
         run: |
           set -e
-
-          python3 download.py
-
-          ffprobe input_video.mp4 > /dev/null 2>&1 || {
-            echo "❌ Invalid downloaded video"
-            exit 1
-          }
-
-          echo "✅ Video downloaded"
-
-      # ─────────────────────────────
-      # FFmpeg Edit
-      # ─────────────────────────────
-      - name: Edit Video
-        run: |
-          set -e
-
-          OUTPUT_FILE="media/video.mp4"
-
-          echo "🎬 Processing video..."
-
-          ffmpeg -y \
-            -i input_video.mp4 \
-            -vf "scale=2160:3840:flags=lanczos,unsharp=7:7:3.0:7:7:1.2,eq=contrast=1.45:brightness=0.02:saturation=1.05:gamma=1.04,format=yuv420p" \
-            -c:v libx264 \
-            -preset veryslow \
-            -crf 18 \
-            -profile:v high \
-            -level 5.1 \
-            -pix_fmt yuv420p \
-            -movflags +faststart \
-            -c:a aac \
-            -b:a 192k \
-            -ar 48000 \
-            "$OUTPUT_FILE"
-
-          echo "✅ Video edited"
-
-      # ─────────────────────────────
-      # Validate cookies secret
-      # ─────────────────────────────
-      - name: Validate cookies secret
-        run: |
-          set -e
-
           if [ -z '${{ secrets.TIKTOK_COOKIES_JSON }}' ]; then
-            echo "❌ Secret TIKTOK_COOKIES_JSON kosong!"
+            echo "❌ Secret TIKTOK_COOKIES_JSON is empty!"
             exit 1
           fi
-
           printf '%s' '${{ secrets.TIKTOK_COOKIES_JSON }}' > cookies.json
-
           python3 -c "
           import json, sys
-
           try:
               data = json.load(open('cookies.json'))
-
               if isinstance(data, dict) and 'cookies' in data:
                   data = data['cookies']
-
               assert isinstance(data, list)
-
               print(f'✅ cookies.json valid: {len(data)} cookies')
-
           except Exception as e:
               print(f'❌ cookies.json invalid: {e}')
               sys.exit(1)
           "
 
       # ─────────────────────────────
-      # Upload TikTok Draft
+      # Prepare media folder
       # ─────────────────────────────
-      - name: Upload TikTok Draft
+      - name: Prepare media folder
+        run: mkdir -p media
+
+      # ─────────────────────────────
+      # Upload & Post to TikTok
+      # ─────────────────────────────
+      - name: Upload & Post to TikTok
         run: |
           set -e
-
           echo "Starting uploader..."
-
           xvfb-run -a python3 uploader.py \
-            --url "$(pwd)/media/video.mp4" \
+            --url "${{ github.event.inputs.video_url }}" \
             --description "${{ github.event.inputs.tiktok_description }}" \
-            --cookies cookies.json \
-          
+            --cookies cookies.json
 
       # ─────────────────────────────
-      # Upload Artifact
+      # Upload Screenshots & Artifacts
       # ─────────────────────────────
-      - name: Upload Result
+      - name: Upload screenshots & artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: final-video
+          name: tiktok-upload-result
           path: |
-            media/*.mp4
-            *.png
+            before_post.png
+            confirm_post_button.png
+            after_post.png
+            post_failed.png
+          if-no-files-found: ignore
 
       # ─────────────────────────────
       # Cleanup
@@ -188,5 +107,5 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          rm -f cookies.json
-          echo "🎉 Workflow completed"
+          rm -f cookies.json video.mp4
+          echo "🎉 Workflow done"
