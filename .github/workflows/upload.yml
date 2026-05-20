@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: 'URL video TikTok'
+        description: 'URL video'
         required: true
       output_filename:
         description: 'Nama output tanpa .mp4'
@@ -17,6 +17,14 @@ on:
         description: 'Caption TikTok'
         required: false
         default: 'Video keren! #fyp #viral'
+      tiktok_schedule:
+        description: 'Gunakan schedule post? (true/false)'
+        required: false
+        default: 'false'
+      schedule_minutes:
+        description: 'Jadwal berapa menit dari sekarang (min 15)'
+        required: false
+        default: '20'
 
 jobs:
   edit-and-upload:
@@ -26,10 +34,10 @@ jobs:
     steps:
 
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -42,7 +50,7 @@ jobs:
             xvfb \
             xdotool \
             x11-utils
-          pip install requests playwright
+          pip install requests playwright pytz
           playwright install chromium
           playwright install-deps chromium
           ffmpeg -version | head -1
@@ -116,12 +124,17 @@ jobs:
       - name: Upload & Post to TikTok
         run: |
           set -e
+          SCHEDULE_FLAG=""
+          if [ "${{ github.event.inputs.tiktok_schedule }}" = "true" ]; then
+            SCHEDULE_FLAG="--schedule --schedule-minutes ${{ github.event.inputs.schedule_minutes }}"
+          fi
           echo "🚀 Starting uploader..."
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
             python3 uploader.py \
             --url "$(pwd)/media/${{ github.event.inputs.output_filename }}.mp4" \
             --description "${{ github.event.inputs.tiktok_description }}" \
-            --cookies cookies.json
+            --cookies cookies.json \
+            $SCHEDULE_FLAG
 
       - name: Upload artifacts
         if: always()
@@ -132,8 +145,13 @@ jobs:
             before_caption.png
             before_post.png
             confirm_post_button.png
+            confirm_schedule_button.png
+            schedule_set.png
             after_post.png
+            after_post_fallback.png
+            after_schedule.png
             post_failed.png
+            schedule_toggle_failed.png
           if-no-files-found: ignore
 
       - name: Cleanup
